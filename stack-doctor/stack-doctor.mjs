@@ -254,6 +254,26 @@ function launchAsUser(target) {
   }
 }
 
+/**
+ * 用普通用户权限启动，并带上参数。
+ *
+ * explorer.exe 不能传参数，所以先写一个一次性的 .cmd 包一层。
+ * 为什么需要 -y：新的启动器会先打印风险提示并等回车（交互时才该出现）。
+ * 守护脚本拉起时必须跳过那个提示，否则没人按键，等于没启动。
+ */
+function launchAsUserVia(target, args = '') {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const safe = path.basename(target).replace(/[^\w.-]/g, '_');
+    const wrapper = path.join(STATE_DIR, `_launch-${safe}.cmd`);
+    fs.writeFileSync(wrapper, `@echo off\r\ncall "${target}" ${args}\r\nexit /b 0\r\n`, 'ascii');
+    return launchAsUser(wrapper);
+  } catch (e) {
+    log(`包装启动失败 ${target}: ${e.message}`);
+    return launchAsUser(target);
+  }
+}
+
 function desktopAlert(text) {
   try {
     const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -330,7 +350,7 @@ async function main() {
       log('找不到 ' + BOOT_BAT);
       return false;
     }
-    return spawnDetached('cmd.exe', ['/c', BOOT_BAT], { cwd: path.dirname(BOOT_BAT), windowsHide: false });
+    return spawnDetached('cmd.exe', ['/c', `"${BOOT_BAT}" -y`], { cwd: path.dirname(BOOT_BAT), windowsHide: false });
   }, {
     label: 'QQ（NapCat）',
     why: nc.why,
@@ -341,7 +361,7 @@ async function main() {
   const bridgeUp = await probePort(3100);
   await handle(state, 'bridge', bridgeUp, () => {
     if (!fs.existsSync(BRIDGE_BAT)) return false;
-    return launchAsUser(BRIDGE_BAT);
+    return launchAsUserVia(BRIDGE_BAT, '-y');
   }, { label: '桥接' });
 
   // 2.5 桥接「假活」：端口在、进程在、控制台也能调，但消息不处理。
@@ -379,7 +399,7 @@ async function main() {
   const fresh = freshWorkers();
   await handle(state, 'workers', fresh >= 5, () => {
     if (!fs.existsSync(SUPERVISOR_BAT)) return false;
-    return launchAsUser(SUPERVISOR_BAT);
+    return launchAsUserVia(SUPERVISOR_BAT, '-y');
   }, {
     label: '后台脚本',
     why: `${fresh}/${WORKER_NAMES.length} 个在跑`,

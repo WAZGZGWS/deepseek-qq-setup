@@ -49,9 +49,25 @@ DeepSeek Harness                        ← 真正说话的那层
 
 ### 0. 一键部署（先跑这个）
 
-双击仓库根目录的 **`install.cmd`**（会提权一次）。
+双击仓库根目录的 **`install.cmd`**（会提权一次），流程是：
 
-它会：检查 Node / DSH / NapCat / 桥接 → 把脚本复制到你指定的目录 → 按你的 QQ 号生成启动脚本 → 注册「全栈体检」计划任务（每 2 分钟自愈）→ 关掉自动睡眠和快速启动。
+**① 先体检这台电脑**：系统版本、CPU、内存、每个盘的剩余空间、UAC 级别、快速启动状态、已装组件（Node / DSH / 7-Zip）。哪项不达标当场说，不往下走。
+
+**② 问安装位置（只问第一次）**：选好的目录记在
+
+```
+%LOCALAPPDATA%\qq-bot-stack\install.json
+```
+
+之后每次运行都读这条记录，**所有东西继续装到同一个位置**。要换位置，在提示里直接输新路径，或者加 `-Reset` 重新问。
+
+**③ 复制 + 生成 + 注册**：脚本复制过去，按你填的 QQ 号生成启动器，注册「全栈体检」计划任务（每 2 分钟自愈），关掉自动睡眠和快速启动。
+
+**④ 依次启动**：装完问你要不要现在启动，按 NapCat → 等 `:3000` 通 → 桥接 → 等 `:3100` 通 → supervisor 的顺序走，每一步都等端口真的通了才走下一步。
+
+**生成的启动器会先打印风险提示**（封号风险 / 隐私 / 计费 / 不含人设 / 要一直开机），你输入 N 就不启动。无人值守调用时加 `-y` 跳过提示——守护脚本就是这么调的。
+
+> 为什么风险提示不在 `.bat` 里写中文：GBK 汉字的尾字节会落在 `|`、`^`、`&` 这些 cmd 元字符上，把一行 `echo` 拆成两条命令，直接报错。中文一律放在 `risk-notice.ps1`（UTF-8 带 BOM），`.bat` 保持纯 ASCII。
 
 **它不会装** Node、DSH、NapCat、桥接——这四样都得你自己装好，缺什么它会直接说缺什么，装完再跑一次即可。
 
@@ -59,9 +75,13 @@ DeepSeek Harness                        ← 真正说话的那层
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1 -TargetDir D:\qq-bot-stack -OwnerQQ 123456789 -BotQQ 987654321
-```
 
-加 `-DryRun` 只看不改。
+# 只看不改
+powershell -ExecutionPolicy Bypass -File install.ps1 -DryRun
+
+# 忘掉记住的位置，重新问
+powershell -ExecutionPolicy Bypass -File install.ps1 -Reset
+```
 
 ### 1. 装 NapCat
 
