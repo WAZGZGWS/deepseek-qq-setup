@@ -1,0 +1,11 @@
+# 统一换行符，避免 Windows 上反复出现 "LF will be replaced by CRLF"
+* text=auto eol=lf
+
+# 批处理必须是 CRLF，否则某些环境下 cmd 解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 图片按二进制处理
+*.png binary
+*.jpg binary
+*.7z binary

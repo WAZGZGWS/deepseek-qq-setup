@@ -1,0 +1,46 @@
+{
+  "config": {
+    "enabled": true,
+    "timezone": "Asia/Shanghai",
+    "ranges": [
+      {
+        "id": "night",
+        "name": "夜间静默",
+        "enabled": true,
+        "start": "00:30",
+        "end": "07:00",
+        "days": "every",
+        "weekdays": [],
+        "skipHolidays": false
+      },
+      {
+        "id": "work1",
+        "name": "上班静默（下午）",
+        "enabled": true,
+        "start": "13:00",
+        "end": "17:00",
+        "days": "every",
+        "weekdays": [],
+        "skipHolidays": false
+      },
+      {
+        "id": "work2",
+        "name": "上班静默（傍晚）",
+        "enabled": true,
+        "start": "18:00",
+        "end": "20:00",
+        "days": "every",
+        "weekdays": [],
+        "skipHolidays": false
+      }
+    ],
+    "options": {
+      "stopWakes": true,
+      "recordMessages": true,
+      "pauseAiTasks": false,
+      "includeOwnerPrivate": false,
+      "catchUpOnEnd": true
+    }
+  },
+  "override": null
+}

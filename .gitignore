@@ -38,3 +38,6 @@ node_modules/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# budget-guard 的运行状态（省电模式标记）
+budget-guard/quiet
