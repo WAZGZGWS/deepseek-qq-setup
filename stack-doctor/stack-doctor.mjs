@@ -30,7 +30,7 @@ const LOG_FILE = path.join(STATE_DIR, 'stack-doctor.log');
 const ALERT_FILE = path.join(STATE_DIR, 'ALERT-stack.txt');
 const ALERT_PS1 = path.join(ROOT, 'napcat-watchdog', 'desktop-alert.ps1');
 
-const NAPCAT_DIR = path.join(ROOT, 'napcat', 'napcat');
+const NAPCAT_DIR = process.env.NAPCAT_DIR || path.join(ROOT, 'napcat', 'napcat');
 // 这几个启动脚本的名字每个部署都不一样，用环境变量可以覆盖，方便别人拿去用
 const BOOT_BAT = process.env.NAPCAT_BOOT_BAT || path.join(ROOT, 'napcat-boot.bat');
 const BRIDGE_BAT = process.env.BRIDGE_BAT || path.join(ROOT, '2-启动桥接.bat');
@@ -166,7 +166,7 @@ function freshWorkers() {
  */
 function lastNapcatDmMs() {
   try {
-    const dir = path.join(ROOT, 'napcat', 'napcat', 'logs');
+    const dir = path.join(NAPCAT_DIR, 'logs');
     const files = fs
       .readdirSync(dir)
       .filter((f) => f.endsWith('.log'))

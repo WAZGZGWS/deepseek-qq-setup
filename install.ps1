@@ -64,6 +64,13 @@ Head 'QQ Bot 运维套件 · 一键部署'
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 
+# node 的绝对路径：计划任务里没有用户 PATH，写 `node` 会找不到（这是实测踩过的坑）
+$nodeExe = 'node'
+try {
+    $cmdNode = Get-Command node -ErrorAction Stop
+    if ($cmdNode -and $cmdNode.Source) { $nodeExe = $cmdNode.Source }
+} catch {}
+
 # ── 1. 机器体检 ─────────────────────────────────────────────────
 Head '① 这台电脑的情况'
 
@@ -360,7 +367,7 @@ if not errorlevel 1 (
   exit /b 0
 )
 :loop
-node src\bridge.js
+"$nodeExe" src\bridge.js
 echo.
 echo [bridge] exited, restarting in 5s (Ctrl+C to stop)
 timeout /t 5 /nobreak >nul
@@ -371,7 +378,7 @@ goto loop
 
 Write-Launcher '20-supervisor.bat' 'QQ Bot Supervisor' @"
 cd /d "$TargetDir\supervisor"
-node supervisor.mjs
+"$nodeExe" supervisor.mjs
 pause
 "@
 
@@ -381,7 +388,7 @@ $sdCmd = @"
 setlocal
 chcp 65001 >nul
 cd /d "$TargetDir\stack-doctor"
-node "$TargetDir\stack-doctor\stack-doctor.mjs"
+"$nodeExe" "$TargetDir\stack-doctor\stack-doctor.mjs"
 exit /b 0
 "@
 if ($DryRun) { Say '  [plan] stack-doctor.cmd' 'DarkGray' }

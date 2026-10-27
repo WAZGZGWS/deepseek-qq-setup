@@ -35,6 +35,41 @@ DeepSeek Harness                        ← 真正说话的那层
   stack-guard  守护 supervisor 和桥接
 ```
 
+## 别人下载下来能直接用吗
+
+**能，但你得先把下面四样装好**——这个仓库只提供「运维那一层」，不含机器人本体。
+
+| 需要你自己准备 | 为什么仓库里没有 |
+|---|---|
+| **Node.js 20+** | 运行时依赖，自己装更安全 |
+| **DeepSeek Harness 桌面版** | 商业桌面应用，不能分发 |
+| **NapCat Shell** | 要你自己扫码登录 QQ |
+| **桥接 dsh-qq-bridge** | 独立项目，本仓库只调它的接口 |
+| **一个人设** | `roles/README.md` 有模板，性格得你自己写 |
+
+装好之后跑 `install.cmd`，它体检时会告诉你还缺哪个。
+
+### 已经处理掉的「换台电脑就坏」
+
+这几处原来写死在我们自己机器上，现在都改成自适应的：
+
+| 原来会坏的地方 | 现在 |
+|---|---|
+| 启动器里写 `node ...`，计划任务没有用户 PATH → 找不到 node | install 时解析 `node.exe` 绝对路径写进去 |
+| `CHAT_KEY` 默认 `private:YOUR_QQ`，不手改就发错人 | 自动从桥接 `config.json` 的 `ownerQQ` 推出来 |
+| NapCat 日志固定找 `<root>\napcat\napcat\logs` | 可用 `NAPCAT_DIR` 覆盖 |
+| 启动脚本名字固定（`2-启动桥接.bat` 等） | `NAPCAT_BOOT_BAT` / `BRIDGE_BAT` / `SUPERVISOR_BAT` 可覆盖 |
+| 中文直接写进 `.bat` → GBK 尾字节撞上 `|` `^` `&` 把命令拆断 | `.bat` 全 ASCII，中文放 `risk-notice.ps1` |
+
+### 还是会有落差的地方
+
+| 落差 | 说明 |
+|---|---|
+| **只有 Windows** | 脚本用 PowerShell + `netstat` + 计划任务，Linux 要重写 |
+| **绑定了桥接的接口** | `dsh-qq-bridge` 的 `/api/socialV2/*`、`config.json` 字段名变了就要跟着改 |
+| **默认目录结构** | 期望 `<root>/dsh-qq/qq-bridge-enhanced-v1.1.0/`，桥接换个名字要改常量 |
+| **中文界面** | 提示都是中文，非中文 Windows 下 `.ps1` 可能显示乱码（功能不受影响） |
+| **计划任务要登录** | 没开自动登录的话，重启后要有人登录才会自愈 |
 ## 前置要求
 
 - **Windows 10/11**（脚本用的是 PowerShell + Node，Linux 需要自己改路径分隔符）

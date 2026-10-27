@@ -17,8 +17,17 @@ import path from 'node:path';
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const ROOT = path.join(HERE, '..');
 const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
+// CHAT_KEY 不填就自动从桥接 config.json 里读 ownerQQ —— 下载的人不用手改
+function resolveChatKey(bridgeDir) {
+  if (process.env.CHAT_KEY) return process.env.CHAT_KEY;
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(bridgeDir, 'config.json'), 'utf8'));
+    if (Number(c.ownerQQ)) return `private:${Number(c.ownerQQ)}`;
+  } catch {}
+  return 'private:YOUR_QQ';
+}
 const STATE = path.join(BRIDGE, 'state');
-const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
+const KEY = resolveChatKey(BRIDGE);
 const DRY = process.argv.includes('--dry') || process.env.DRY_RUN === '1';
 
 const MAX_TRAITS = Number(process.env.MAX_TRAITS || 10);

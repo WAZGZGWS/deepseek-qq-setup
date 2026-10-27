@@ -19,8 +19,17 @@ import path from 'node:path';
 
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const BRIDGE = path.join(HERE, '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
+// CHAT_KEY 不填就自动从桥接 config.json 里读 ownerQQ —— 下载的人不用手改
+function resolveChatKey(bridgeDir) {
+  if (process.env.CHAT_KEY) return process.env.CHAT_KEY;
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(bridgeDir, 'config.json'), 'utf8'));
+    if (Number(c.ownerQQ)) return `private:${Number(c.ownerQQ)}`;
+  } catch {}
+  return 'private:YOUR_QQ';
+}
 const STATE = path.join(BRIDGE, 'state');
-const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
+const KEY = resolveChatKey(BRIDGE);
 const ROTATE_AT = Number(process.env.ROTATE_AT || 24000);
 const URGENT_AT = Number(process.env.URGENT_AT || 34000);
 // 硬上限：到了这个长度就不再管回合忙不忙，直接换。
