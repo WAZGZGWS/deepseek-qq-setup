@@ -32,6 +32,8 @@
   <sub>谢谢给的 token</sub>
 </p>
 
+<sub>（图片没显示出来？点这里看原图 → [`donate/qr.png`](donate/qr.png)）</sub>
+
 > 这不是"请求"，是**协议条款**：PolyForm Noncommercial 1.0.0 明确只授权非商业用途。
 > 商业使用（拿去卖、打包成付费服务、放进收费产品）没有授权。
 > 想商用请先联系作者单独谈授权。
