@@ -209,6 +209,43 @@ node self-check/self-check.mjs --fix    # 能修的自动修
 └── versions/         版本快照
 ```
 
+## 更新与推送
+
+改完代码后：
+
+```powershell
+cd <本仓库目录>
+git add -A
+git commit -m "说明你改了什么"
+git push
+```
+
+**改了什么容易忘**：路径和账号不是写在一处的，动过之后记得同步：
+
+| 改了什么 | 要同步的地方 |
+|---|---|
+| 部署目录 | `cron/cron.mjs` 顶部的绝对路径 |
+| QQ 号 | `config.json` 的 `ownerQQ` / `allow.private` |
+| 人设文件名 | `roles/` 下的文件（回归测试会自动发现，但路径别写死） |
+
+## GitHub 推送常见故障
+
+国内网络推 GitHub 经常会撞上这几个，照着处理：
+
+| 报错 | 原因 | 解法 |
+|---|---|---|
+| `schannel: next InitializeSecurityContext failed: CRYPT_E_NO_REVOCATION_CHECK (0x80092012)` | 网络里有代理/安全软件拦了 github.com，证书吊销列表拉不到 | `git config --global http.schannelCheckRevoke false`；还不行再加 `git config --global http.sslVerify false` |
+| `Repository not found` | 仓库还没建，或者名字拼错 | 先在 GitHub 建**空仓库**，别勾 README / .gitignore / license |
+| `Permission to USER/REPO.git denied` / `403` | token 没有写权限 | 用 classic token，**必须勾 `repo`**；Fine-grained token 要把 `Contents` 设成 Read and write |
+| `fatal: 此平台上不支持操作` | Git Credential Manager 存不下凭据（便携版 git 常见） | `git config --local credential.helper ""` 然后 `git config --local --add credential.helper store`，改用 token 认证 |
+| 一直停在 `Waiting for your browser` | 浏览器授权没回到终端 | 直接带 token 推：`git push https://用户名:TOKEN@github.com/用户/仓库.git main` |
+
+**token 不要留在配置里**：用带 token 的临时地址推完，立刻改回干净地址——
+
+```powershell
+git remote set-url origin https://github.com/用户/仓库.git
+```
+
 ## License
 
 MIT
