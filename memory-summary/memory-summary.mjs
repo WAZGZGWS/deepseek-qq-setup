@@ -64,7 +64,7 @@ async function summarize(dayStr, bodies) {
   if (!key) { log('没有 API key，跳过摘要'); return null; }
 
   // 把前 3 天的摘要喂进去，让它别重复已经写过的事。
-  // 否则「用户 10:30 睡」这种稳定事实会每天出现一次，注入 4 天就重复 4 遍。
+  // 否则「哥 10:30 睡」这种稳定事实会每天出现一次，注入 4 天就重复 4 遍。
   const prev = [];
   for (let i = 1; i <= 3; i++) {
     const d = day(-i);
@@ -84,7 +84,7 @@ async function summarize(dayStr, bodies) {
   const tail = bodies.slice(-120);
   const sample = [...new Set([...head, ...tail])].join('\n');
 
-  const prompt = `下面是${dayStr}这一天，一个 AI 角色和用户的聊天片段。请提炼 3~4 条「今天新增、值得长期记住」的要点，每条一行，不超过 30 字。
+  const prompt = `下面是${dayStr}这一天，一个<BOT_NAME>（<BOT_NAME>）和哥哥的聊天片段。请提炼 3~4 条「今天新增、值得长期记住」的要点，每条一行，不超过 30 字。
 
 规则：
 - 只写事实和偏好，不写评价、不总结心情、不用「记录显示」这类词
@@ -131,10 +131,11 @@ async function main() {
   fs.writeFileSync(file, `# ${target} 摘要\n\n${text}\n`, 'utf8');
   log(`已写入 ${file}（源 ${bodies.length} 条，抽样 ${Math.min(bodies.length, 240)} 条）`);
 
-  // 顺手清理 30 天前的摘要，别让它堆着
+  // 摘要永久保留：E 盘空间管够，一天才 300 多字节，十年也就 1 MB。
+  // （以前是保留 90 天，删掉的其实是"她说过的话"本身，不值得为了这点空间丢记忆）
   try {
     const keep = new Set();
-    for (let i = 0; i < 90; i++) keep.add(day(-i));
+    for (let i = 0; i < 3650; i++) keep.add(day(-i));
     for (const f of fs.readdirSync(OUT)) {
       if (!f.endsWith('.md')) continue;
       if (!keep.has(f.replace('.md', ''))) fs.unlinkSync(path.join(OUT, f));

@@ -40,14 +40,8 @@ function portOpen(port) {
 }
 
 // ---- 角色卡 ----
-const roleDir = path.join(BRIDGE, 'roles');
-const roleFile = (() => {
-  try {
-    const f = fs.readdirSync(roleDir).filter((n) => n.endsWith('.md') && n.toLowerCase() !== 'readme.md').sort();
-    return f.length ? path.join(roleDir, f[0]) : path.join(roleDir, 'role.md');
-  } catch { return path.join(roleDir, 'role.md'); }
-})();
-check('角色卡存在', () => fs.existsSync(roleFile) || '缺失 roles/ 下的角色卡');
+const roleFile = path.join(BRIDGE, 'roles', '<BOT_NAME>.md');
+check('角色卡存在', () => fs.existsSync(roleFile) || '缺失 roles/<BOT_NAME>.md');
 check('角色卡有「你是谁」', () => read(roleFile).includes('你是谁'));
 check('角色卡有「口癖」', () => read(roleFile).includes('口癖'));
 check('角色卡有「翻旧账」', () => read(roleFile).includes('翻旧账'));
@@ -76,7 +70,18 @@ check('工具数 <= 15', () => {
   const n = Object.entries(cfg.socialV2.tools).filter(([, v]) => v).length;
   return n <= 15 || `当前 ${n}`;
 });
-check('主动唤醒关闭', () => cfg.socialV2.proactive.enabled === false);
+// 2026-10-27 起改成「允许偶尔主动开口」：不再要求全关，而是要求开得克制。
+// 概率 > 0.3 就太吵了（一天能主动找你七八次），间隔 < 10 分钟也算失控。
+check('主动唤醒克制', () => {
+  const p = cfg.socialV2.proactive || {};
+  if (p.enabled === false) return true; // 关掉当然也算克制
+  const prob = Number(p.probability);
+  const minMs = Number(p.checkIntervalMinMs);
+  const bad = [];
+  if (!(prob <= 0.3)) bad.push(`概率 ${prob}`);
+  if (!(minMs >= 10 * 60 * 1000)) bad.push(`间隔 ${Math.round(minMs / 60000)}min`);
+  return bad.length === 0 || bad.join(' / ');
+});
 
 // ---- qzone 护栏 ----
 const qz = read(path.join(BRIDGE, 'src', 'mcp-qzone.mjs'));

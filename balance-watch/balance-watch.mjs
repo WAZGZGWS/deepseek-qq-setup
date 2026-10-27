@@ -4,36 +4,64 @@ singleInstance('balance');
 /**
  * balance-watch —— DeepSeek 余额守门员
  *
- * 每 N 分钟查一次官方余额接口；低于阈值就用 NapCat 给主人发 QQ 私聊提醒。
- * 不依赖模型、不依赖 DSH，只要 NapCat 在线就能跑。
+ * 每 N 分钟查一次官方余额接口，余额越低提醒越勤，提醒里带充值链接。
+ * 不依赖模型、不依赖 DSH，只要 NapCat 在线就能直接把消息推到你手机上。
+ *
+ * 四档提醒（越低越急）：
+ *   < 1 元   每小时      基本快断气
+ *   < 2 元   每 3 小时
+ *   < 5 元   每 6 小时
+ *   < 10 元  每 12 小时
+ * 每档各自计时，不会因为刚提醒过 10 元档就把 1 元档的提醒也吃掉。
  *
  * 配置（环境变量或同目录 balance-watch.json）：
  *   DEEPSEEK_KEY_FILE   默认 ~/.dsh/.credentials.yaml
  *   NAPCAT_HTTP         默认 http://127.0.0.1:3000
- *   OWNER_QQ            默认 YOUR_QQ
- *   THRESHOLD_CNY       默认 10
+ *   OWNER_QQ            默认取桥接 config.json 的 ownerQQ
  *   INTERVAL_MIN        默认 30
- *   ALERT_COOLDOWN_H    同一阈值内重复提醒的最小间隔，默认 6 小时
+ *   THRESHOLD_CNY       覆盖最高档阈值（默认 10）
+ *   TOPUP_URL           充值页地址
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const STATE_FILE = path.join(HERE, '..', 'state', 'balance-watch.json');
+const STATE_DIR = path.join(HERE, '..', 'state');
+const STATE_FILE = path.join(STATE_DIR, 'balance-watch.json');
+const LOG_FILE = path.join(STATE_DIR, 'balance-watch.log');
+const TOPUP_URL = process.env.TOPUP_URL || 'https://platform.deepseek.com/top_up';
 
 function loadConfig() {
   let file = {};
   try {
     file = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'balance-watch.json'), 'utf8'));
   } catch {}
+
+  // 主人 QQ：优先 env，其次文件，最后从桥接配置里读（避免两边写死不一致）
+  let ownerQQ = Number(process.env.OWNER_QQ || file.ownerQQ || 0);
+  if (!ownerQQ) {
+    try {
+      const c = JSON.parse(
+        fs.readFileSync(path.join(HERE, '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'config.json'), 'utf8'),
+      );
+      ownerQQ = Number(c.ownerQQ) || 0;
+    } catch {}
+  }
+
+  const top = Number(process.env.THRESHOLD_CNY ?? file.threshold ?? 10);
+
   return {
     keyFile: process.env.DEEPSEEK_KEY_FILE || file.keyFile || path.join(os.homedir(), '.dsh', '.credentials.yaml'),
     napcat: process.env.NAPCAT_HTTP || file.napcat || 'http://127.0.0.1:3000',
-    ownerQQ: Number(process.env.OWNER_QQ || file.ownerQQ || 0),
-    threshold: Number(process.env.THRESHOLD_CNY ?? file.threshold ?? 10),
+    ownerQQ,
     intervalMin: Number(process.env.INTERVAL_MIN || file.intervalMin || 30),
-    cooldownH: Number(process.env.ALERT_COOLDOWN_H || file.cooldownH || 6),
+    tiers: [
+      { at: 1, cooldownH: 1 },
+      { at: 2, cooldownH: 3 },
+      { at: 5, cooldownH: 6 },
+      { at: Math.max(6, top), cooldownH: 12 },
+    ],
   };
 }
 
@@ -61,12 +89,120 @@ async function queryBalance(key) {
     available: j.is_available === true,
     currency: cny?.currency || 'CNY',
     total: Number(cny?.total_balance ?? 0),
-    granted: Number(cny?.granted_balance ?? 0),
-    toppedUp: Number(cny?.topped_up_balance ?? 0),
   };
 }
 
-async function sendQQ(cfg, text) {
+// ── 余额驱动的「说话频率」开关 ────────────────────────────────────────────────
+// ── 静默时段不发消息 ────────────────────────────────────────────────────────
+// 余额提醒是绕过 AI 直接调 NapCat 发的，所以桥接的静默时段拦不住它。
+// 不加这道闸，半夜 3 点钱快没了就会真的把你吵醒。宁可等到早上再说。
+const SILENCE_FILE = path.join(HERE, '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state', 'silence-schedule.json');
+
+function cnHHMM() {
+  return new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false }).slice(0, 5);
+}
+
+function inQuietHours() {
+  try {
+    const j = JSON.parse(fs.readFileSync(SILENCE_FILE, 'utf8'));
+    const cfg = j.config || {};
+    if (cfg.enabled === false) return false;
+    const now = cnHHMM();
+    for (const r of cfg.ranges || []) {
+      if (r.enabled === false) continue;
+      const s = String(r.start);
+      const e = String(r.end);
+      // 跨零点的区间（如 23:00-07:00）
+      const hit = s <= e ? now >= s && now < e : now >= s || now < e;
+      if (hit) return true;
+    }
+  } catch {}
+  return false;
+}
+
+// 钱多的时候允许她偶尔主动开口（20~25% 机会 / 安静半小时以上才判定）；
+// 钱快没了就自动收敛：先降概率、再关掉主动、最后连回复也缩短。
+// 走桥接控制台 POST /api/socialV2/config，改完立刻生效并落盘到 config.json。
+const MODES = [
+  {
+    id: 'critical',
+    below: 1,
+    patch: { proactive: { enabled: false }, send: { burstMaxMessages: 2, maxMessageChars: 160 } },
+  },
+  {
+    id: 'tight',
+    below: 2,
+    patch: { proactive: { enabled: false } },
+  },
+  {
+    id: 'low',
+    below: 5,
+    patch: {
+      proactive: {
+        enabled: true,
+        probability: 0.1,
+        checkIntervalMinMs: 5400000,
+        checkIntervalMaxMs: 9000000,
+        idleThresholdMs: 3600000,
+      },
+    },
+  },
+  {
+    id: 'normal',
+    below: Infinity,
+    patch: {
+      proactive: {
+        enabled: true,
+        probability: 0.25,
+        checkIntervalMinMs: 2700000,
+        checkIntervalMaxMs: 5400000,
+        idleThresholdMs: 1800000,
+      },
+      send: { burstMaxMessages: 8, maxMessageChars: 500 },
+    },
+  },
+];
+
+function pickMode(total) {
+  // 升序，第一个命中就是最紧的一档
+  return MODES.find((m) => total < m.below) || MODES[MODES.length - 1];
+}
+
+function consoleToken() {
+  try {
+    return fs
+      .readFileSync(path.join(HERE, '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state', 'console-token'), 'utf8')
+      .trim();
+  } catch {
+    return '';
+  }
+}
+
+async function applyMode(cfg, mode) {
+  const token = consoleToken();
+  if (!token) {
+    log('拿不到桥接 console-token，跳过模式切换');
+    return false;
+  }
+  const base = (cfg.napcat || 'http://127.0.0.1:3000').replace(/\/+$/, '').replace(/:3000$/, ':3100');
+  try {
+    const r = await fetch(`${base}/api/socialV2/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-console-token': token },
+      body: JSON.stringify(mode.patch),
+      signal: AbortSignal.timeout(10000),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(`HTTP ${r.status}`);
+    log(`说话频率切到「${mode.id}」档：${JSON.stringify(mode.patch)}`);
+    return true;
+  } catch (e) {
+    log(`切换模式失败（桥接可能没起来）: ${e.message}`);
+    return false;
+  }
+}
+
+async function sendQQ(cfg, text) {  if (!cfg.ownerQQ) throw new Error('没有 ownerQQ，不知道发给谁');
   const r = await fetch(`${cfg.napcat.replace(/\/+$/, '')}/send_private_msg`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -83,12 +219,12 @@ function log(...args) {
   const ts = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   const line = `[${ts}] ${args.join(' ')}`;
   try { console.log(line); } catch {}
-  // 以前只写 console，一旦 API 偶发超时导致跳过一轮，外面完全看不到，
-  // 只能从 state 的时间戳猜。落一份文件才查得动。
   try {
-    const dir = path.dirname(STATE_FILE);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.appendFileSync(path.join(dir, 'balance-watch.log'), line + '\n');
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    try {
+      if (fs.statSync(LOG_FILE).size > 512 * 1024) fs.renameSync(LOG_FILE, LOG_FILE + '.1');
+    } catch {}
+    fs.appendFileSync(LOG_FILE, line + '\n');
   } catch {}
 }
 
@@ -102,49 +238,125 @@ function readState() {
 
 function writeState(s) {
   try {
-    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
     fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2));
   } catch {}
 }
 
+function tierText(total, tierAt, available) {
+  // 写成人话，不要出现"余额""接口""系统""自动恢复"这类运维词——
+  // 聊天窗口里冒出技术说词会让她当场破功。
+  const money = total.toFixed(1);
+  if (!available) {
+    return `哥，我这边钱用光了，一句话都说不出来了。帮我充一点点好不好\n${TOPUP_URL}`;
+  }
+  if (tierAt <= 1) return `哥，只剩 ${money} 块了，再说几句我就哑了。\n${TOPUP_URL}`;
+  if (tierAt <= 2) return `哥，就剩 ${money} 块了，撑不了多久啦。\n${TOPUP_URL}`;
+  if (tierAt <= 5) return `哥，我这边剩 ${money} 块了，记得给我充一点。\n${TOPUP_URL}`;
+  return `哥，我这边还剩 ${money} 块，一天大概要花两块多，你先留意着点。\n${TOPUP_URL}`;
+}
+
 async function tick(cfg) {
   const state = readState();
+
+  // 上轮没发出去的（比如当时 QQ 掉线），这轮先补。静默时段不补，等到早上。
+  if (state.pending && inQuietHours()) {
+    log('[静默] 有排队提醒，但现在是她不该说话的时段，等静默结束再发');
+  } else if (state.pending) {
+    try {
+      await sendQQ(cfg, state.pending);
+      log('补发了上轮没发出去的提醒');
+      delete state.pending;
+    } catch (e) {
+      log('补发仍失败:', e.message);
+    }
+  }
+
   let bal;
   try {
     bal = await queryBalance(readKey(cfg.keyFile));
   } catch (error) {
     log('查余额失败:', error.message);
+    writeState(state);
     return;
   }
+
   state.lastCheckAt = Date.now();
   state.lastBalance = bal.total;
-  log(`余额 ${bal.total.toFixed(2)} ${bal.currency}（阈值 ${cfg.threshold}）`);
+  log(`余额 ${bal.total.toFixed(2)} ${bal.currency}`);
 
-  const low = !bal.available || bal.total < cfg.threshold;
-  const lastAlert = Number(state.lastAlertAt || 0);
-  const cooldownMs = cfg.cooldownH * 3600 * 1000;
-
-  if (low && Date.now() - lastAlert > cooldownMs) {
-    const text =
-      bal.available === false
-        ? `你的 DeepSeek 余额好像用完了（当前 ${bal.total.toFixed(2)} 元），充点吧，不然我要断气了。`
-        : `你的 DeepSeek 余额只剩 ${bal.total.toFixed(2)} 元了，记得充一下。`;
-    try {
-      const critical = bal.total < Number(process.env.CRITICAL_CNY || 1);
-      if (process.env.ALERT_QQ === '1' || critical) await sendQQ(cfg, text);
-      else log('[静默] 只写本地提醒，不发 QQ');
-      state.lastAlertAt = Date.now();
-      state.lastAlertText = text;
-      try { fs.writeFileSync(path.join(STATE, 'ALERT-balance.txt'), `${new Date().toISOString()} ${text}\n`); } catch {}
-      log('已提醒主人:', text);
-    } catch (error) {
-      log('提醒发送失败:', error.message);
-    }
+  // 按余额切换「说话频率」（只在档位变化时才调接口，避免每 30 分钟写一次配置）
+  const mode = pickMode(bal.available ? bal.total : 0);
+  if (state.mode !== mode.id) {
+    if (await applyMode(cfg, mode)) state.mode = mode.id;
   }
+
+  // ---- 已充值：道个谢，把所有档位复位 ----
+  const topTier = cfg.tiers[cfg.tiers.length - 1].at;
+  if (bal.total >= topTier && state.wasLow) {
+    state.wasLow = false;
+    state.alerts = {};
+    const text = `哥你充上啦，我又能说话了`;
+    try {
+      if (inQuietHours()) {
+        log('[静默] 想道谢，但现在不该说话，排到静默结束');
+        state.pending = text;
+      } else {
+        await sendQQ(cfg, text);
+        log('已道谢:', text);
+      }
+    } catch (e) {
+      log('道谢没发出去:', e.message);
+      state.pending = text;
+    }
+    writeState(state);
+    return;
+  }
+
+  // ---- 挑最紧急的命中档位（升序，第一个命中就是最紧急的）----
+  const hit = cfg.tiers.find((t) => (!bal.available || bal.total < t.at));
+  if (!hit) {
+    writeState(state);
+    return;
+  }
+  state.wasLow = true;
+
+  const alerts = state.alerts || (state.alerts = {});
+  const last = Number(alerts[hit.at] || 0);
+  if (Date.now() - last < hit.cooldownH * 3600 * 1000) {
+    writeState(state);
+    return;
+  }
+
+  const text = tierText(bal.total, hit.at, bal.available);
+  try {
+    if (inQuietHours()) {
+      log(`[静默] 想提醒 <${hit.at} 元档，但现在不该说话，等静默结束`);
+      state.pending = text;
+    } else {
+      await sendQQ(cfg, text);
+      alerts[hit.at] = Date.now();
+      state.lastAlertText = text;
+      log(`已提醒 <${hit.at} 元档: ${text.split('\n')[0]}`);
+    }
+  } catch (e) {
+    log('提醒发送失败（下轮补发）:', e.message);
+    state.pending = text;
+  }
+
+  // 无论如何也写一份本地告警，方便事后查
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(STATE_DIR, 'ALERT-balance.txt'), `${new Date().toISOString()}\n${text}\n`);
+  } catch {}
+
   writeState(state);
 }
 
 const cfg = loadConfig();
-log(`启动：阈值 ${cfg.threshold} 元 / 每 ${cfg.intervalMin} 分钟查一次 / 主人 ${cfg.ownerQQ}`);
+log(
+  `启动：档位 ${cfg.tiers.map((t) => '<' + t.at).join(' / ')} 元，每 ${cfg.intervalMin} 分钟查一次，` +
+    `主人 ${cfg.ownerQQ || '(未配置)'}，充值页 ${TOPUP_URL}`,
+);
 await tick(cfg);
 setInterval(() => void tick(cfg), Math.max(5, cfg.intervalMin) * 60 * 1000);

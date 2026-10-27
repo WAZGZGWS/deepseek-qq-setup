@@ -106,14 +106,16 @@ npm init -y     # 如果你要用到 node_modules 里的东西
 |---|---|---|
 | `supervisor` | 常驻 | 管 7 个 worker，崩溃 5 秒后重启 |
 | `stack-guard` | 常驻 | 守护桥接 + supervisor |
-| `context-guard` | 每 3 分钟 | 上下文超 32k 换会话（52k 缩短等待，65k 强制） |
-| `memory-tidy` | 每天 22:20 | 合并重复、清过期话题 |
+| `stack-doctor` | 每 2 分钟（计划任务） | 全栈体检：QQ / 桥接 / DSH / 后台脚本，谁挂了拉谁 |
+| `like-card` | 每天 09:30 | 给主人名片点赞（纯 API，不花 token） |
+| `context-guard` | 每 3 分钟 | 上下文超 24k 换会话（34k 缩短等待，46k 强制） |
+| `memory-tidy` | 每天 22:20 | 合并重复、压缩冗长、清过期话题（长期事实一条不丢） |
 | `memory-summary` | 每天 23:10 | 生成当日摘要（跨天去重） |
 | `self-check` | 每天 21:20 | 自查 + 自动清僵尸锁 |
 | `archive` | 每 60 秒 | 归档聊天到 `archive/logs/YYYY-MM-DD.md` |
 | `session-janitor` | 每 60 分钟 | 清理闲置会话 |
 | `budget-guard` | 每 30 分钟 | 超预算进省电模式 |
-| `balance-watch` | 每 30 分钟 | 余额低于阈值推 QQ |
+| `balance-watch` | 每 30 分钟 | 余额四档提醒（带充值链接）、余额越低说话越少、静默时段不发 |
 | `power-guard` | 每 60 秒 | 断电/睡眠前存档 |
 | `cron` | 每 30 秒 | 调度上面这些定时任务 |
 | `notify` | 按需 | 外部告警出口 |
@@ -160,6 +162,10 @@ worker 每 3 秒检查自己的脚本和 `single.mjs` 的 mtime，变了就 `exi
 | **`String(对象)` = `[object Object]`** | 记忆里出现脏条目 | 入口处拒绝 object 类型的 content |
 | **pid 复用** | 锁指向已死的进程，但检测说"活着" | 心跳 |
 | **计划任务返回 -1073741510** | NapCat 自启失败（控制台被关） | 只能手动点 UAC |
+| **`.bat` 里写中文注释** | 脚本"闪一下就没了"，cmd 报语法错误 | `.bat` 全用 ASCII，中文放到 `.ps1`（UTF-8 带 BOM） |
+| **提权进程写不进桥接的 state 目录** | 守护脚本说"已拉起"，`3100` 却永远是空的（桥接在 `bridge.lock` 上 `EPERM` 退出） | 那个目录带 Low 完整性标签。用 `explorer.exe <脚本>` 代开，权限退回普通用户就写得进去了 |
+| **进程活着、端口在听、消息不处理** | 你发消息她一个字不回，端口和进程检查全部正常 | 对账：NapCat 日志里"收到私聊"的时间 vs 桥接记录的 `lastIncomingAt`，差 5 分钟以上就重启桥接 |
+| **余额提醒半夜发消息** | 凌晨被"钱快没了"吵醒 | 提醒是脚本直连 NapCat 发的，绕过了桥接静默。脚本里要自己判断静默时段 |
 
 ## 自检
 
@@ -171,6 +177,43 @@ node self-check/self-check.mjs --fix    # 能修的自动修
 检查四项：API key 一致性、worker 重启循环、记忆一致性、出戏检测。
 
 **建议加进 cron**（本项目已默认 21:20 执行）。
+
+## 全栈体检（stack-doctor）
+
+每 2 分钟跑一次，跑完就退。检查四层，谁挂了拉谁：
+
+| 检查项 | 判断方式 | 挂了怎么办 |
+|---|---|---|
+| QQ（NapCat） | `POST :3000/get_login_info` 有没有 `user_id` | `launcher.bat -q QQ号` 快速登录 |
+| 桥接 | `:3100` 能不能连上 | 重新拉起启动脚本 |
+| 桥接"假活" | NapCat 日志的"接收"时间 vs 桥接的 `lastIncomingAt` | 调 `/api/restart` 重启 |
+| DSH 本体 | `tasklist` 里有没有 `DeepSeek Harness.exe` | 直接启动 exe |
+| 后台脚本 | 7 个 worker 锁有几个是新鲜的（5 分钟内） | 重新拉起 supervisor |
+
+**为什么用计划任务而不是常驻进程**：常驻进程有"活着"这个状态，所以它会死，而且死了没人知道（实测：看门狗 09:00 自己死了，13:33 QQ 掉线后 7 小时无人处理）。一次性脚本没有"活着"这个状态，也就死不了。
+
+**为什么用 `explorer.exe` 启动桥接**：计划任务要提权（拉起 NapCat 必须），但桥接的 `state` 目录带 Low 完整性标签，高权限进程写不进去。`explorer.exe` 是已登录用户的 shell，由它代开就退回普通权限。
+
+注册（管理员 PowerShell，按需改路径）：
+
+```powershell
+$action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c "E:\qq-bot-stack\stack-doctor\run.cmd"' -WorkingDirectory 'E:\qq-bot-stack'
+$logon   = New-ScheduledTaskTrigger -AtLogOn
+$repeat  = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)
+$set     = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+$who     = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Highest
+Register-ScheduledTask -TaskName 'QQStackDoctor' -Action $action -Trigger @($logon,$repeat) -Settings $set -Principal $who -Force
+```
+
+启动脚本的名字如果和默认不一样，用环境变量覆盖，不用改代码：
+
+```
+NAPCAT_BOOT_BAT   napcat-boot.bat
+BRIDGE_BAT        2-启动桥接.bat
+SUPERVISOR_BAT    20-supervisor.bat
+```
+
+**它不会往聊天里发任何东西**——恢复日志只写文件和弹窗。让她说话只能由她自己说。
 
 ## 告警
 
@@ -193,6 +236,7 @@ node self-check/self-check.mjs --fix    # 能修的自动修
 ├── context-guard/    上下文轮换
 ├── cron/             定时器
 ├── daily-report/     每日报表
+├── like-card/        名片点赞（0 token）
 ├── lock/             心跳单例锁
 ├── maintenance/      日志轮转 + 备份
 ├── memory-summary/   每日摘要
@@ -204,6 +248,7 @@ node self-check/self-check.mjs --fix    # 能修的自动修
 ├── roles/            人设（自己写）
 ├── self-check/       自查
 ├── session-janitor/  会话清理
+├── stack-doctor/     全栈体检（每 2 分钟）
 ├── stack-guard/      整链守护
 ├── supervisor/       进程总管
 └── versions/         版本快照

@@ -22,9 +22,12 @@ const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
 const DRY = process.argv.includes('--dry') || process.env.DRY_RUN === '1';
 
 const MAX_TRAITS = Number(process.env.MAX_TRAITS || 10);
-const MAX_TRAIT_CHARS = Number(process.env.MAX_TRAIT_CHARS || 180);
+const MAX_TRAIT_CHARS = Number(process.env.MAX_TRAIT_CHARS || 120);
 const MAX_TOPICS = Number(process.env.MAX_TOPICS || 12);
 const TOPIC_TTL_DAYS = Number(process.env.TOPIC_TTL_DAYS || 14);
+const MAX_FACTS = Number(process.env.MAX_FACTS || 40);
+const MAX_FACT_CHARS = Number(process.env.MAX_FACT_CHARS || 60);
+const MAX_TOPIC_CHARS = Number(process.env.MAX_TOPIC_CHARS || 80);
 
 function log(...a) {
   const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
@@ -94,7 +97,16 @@ async function main() {
     const ts = Number(t.lastMentionAt || 0);
     if (!ts) return true;
     return Date.now() - ts < TOPIC_TTL_DAYS * 86400000;
-  }).sort((a, b) => Number(b.lastMentionAt || 0) - Number(a.lastMentionAt || 0)).slice(0, MAX_TOPICS);
+  })
+    // 还没聊完的事（pendingQuestion）优先留着，别因为"旧"就砍掉
+    .sort((a, b) => {
+      const pa = a.pendingQuestion ? 1 : 0;
+      const pb = b.pendingQuestion ? 1 : 0;
+      if (pa !== pb) return pb - pa;
+      return Number(b.lastMentionAt || 0) - Number(a.lastMentionAt || 0);
+    })
+    .slice(0, MAX_TOPICS)
+    .map((t) => ({ ...t, text: String(t.text || '').trim().slice(0, MAX_TOPIC_CHARS) }));
 
   const impressions = {};
   for (const [target, im] of Object.entries(mem.memberImpressions || {})) {
@@ -104,15 +116,46 @@ async function main() {
 
   const thoughts = dedupeList((mem.pendingThoughts || []).map((t) => t.text), 5, 120);
 
+  // ── 长期事实：合并近似的、压缩冗长的，但**一条都不许丢** ──────────────
+  // facts 是只增不删的那一层，之前靠 "超过 30 条丢最旧的" 兜底，
+  // 等于聊久了就开始忘早期的事。这里改成先合并重复，实在超过 40 条再谈上限。
+  const factsIn = (mem.facts || [])
+    .map((f) => (typeof f === 'string' ? f : f && f.text))
+    .map((s) => String(s || '').trim())
+    .filter(Boolean);
+  const facts = [];
+  let mergedFacts = 0;
+  for (const raw of factsIn) {
+    const t = raw.slice(0, MAX_FACT_CHARS);
+    const dup = facts.findIndex((f) => similar(f, t));
+    if (dup >= 0) {
+      // 留信息更全的那条，不是留新的那条
+      if (t.length > facts[dup].length && !facts[dup].includes(t)) facts[dup] = t;
+      mergedFacts += 1;
+      continue;
+    }
+    facts.push(t);
+  }
+  const factsNew = facts.slice(0, MAX_FACTS);
+  const factsChanged = factsNew.length !== factsIn.length || factsNew.some((f, i) => f !== factsIn[i]);
+
   const before = JSON.stringify(mem);
-  const after = JSON.stringify({ topics, impressions, thoughts });
+  const after = JSON.stringify({ topics, impressions, thoughts, facts: factsNew });
   if (before === after) { log('记忆已经是最优状态，无需改动'); return; }
 
-  const summary = `话题 ${(mem.activeTopics || []).length}→${topics.length}｜印象 ${Object.keys(mem.memberImpressions || {}).length}→${Object.keys(impressions).length} 人｜想法 ${(mem.pendingThoughts || []).length}→${thoughts.length}`;
+  const summary =
+    `话题 ${(mem.activeTopics || []).length}→${topics.length}｜` +
+    `印象 ${Object.keys(mem.memberImpressions || {}).length}→${Object.keys(impressions).length} 人｜` +
+    `想法 ${(mem.pendingThoughts || []).length}→${thoughts.length}｜` +
+    `长期事实 ${factsIn.length}→${factsNew.length}` +
+    (mergedFacts ? `（合并 ${mergedFacts} 条重复）` : '');
   if (DRY) { log('[dry-run]', summary); return; }
 
-  // 分类别清空，别碰 fact —— 长期事实是只增不删的，清掉就真没了
-  for (const cat of ['activeTopic', 'pendingThought', 'memberImpression']) {
+  // 分类别清空。fact 默认不动 —— 只有真的合并/压缩过头了才重建一遍，
+  // 重建前已经快照到 chat-memory/tidy-<日期>.json，出问题能捞回来。
+  const clearCats = ['activeTopic', 'pendingThought', 'memberImpression'];
+  if (factsChanged && factsNew.length > 0) clearCats.push('fact');
+  for (const cat of clearCats) {
     await api('/api/socialV2/memory-clear', { method: 'POST', body: JSON.stringify({ key: KEY, category: cat }) });
   }
   for (const t of topics) {
@@ -129,6 +172,14 @@ async function main() {
       await api('/api/socialV2/memory-append', {
         method: 'POST',
         body: JSON.stringify({ key: KEY, category: 'memberImpression', content: trait, extra: { target } }),
+      });
+    }
+  }
+  if (clearCats.includes('fact')) {
+    for (const f of factsNew) {
+      await api('/api/socialV2/memory-append', {
+        method: 'POST',
+        body: JSON.stringify({ key: KEY, category: 'fact', content: f }),
       });
     }
   }

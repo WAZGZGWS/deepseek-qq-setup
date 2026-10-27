@@ -21,14 +21,14 @@ const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z
 const BRIDGE = path.join(HERE, '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
 const STATE = path.join(BRIDGE, 'state');
 const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
-const ROTATE_AT = Number(process.env.ROTATE_AT || 32000);
-const URGENT_AT = Number(process.env.URGENT_AT || 52000);
+const ROTATE_AT = Number(process.env.ROTATE_AT || 24000);
+const URGENT_AT = Number(process.env.URGENT_AT || 34000);
 // 硬上限：到了这个长度就不再管回合忙不忙，直接换。
 // 有记忆快照 + 回顾兜底，换掉不会失忆，比继续按 60k 烧着划算。
-const CRITICAL_AT = Number(process.env.CRITICAL_AT || 65000);
+const CRITICAL_AT = Number(process.env.CRITICAL_AT || 46000);
 const CHECK_MIN = Math.max(2, Number(process.env.CHECK_MIN || 3));
 const IDLE_MIN = Number(process.env.IDLE_MIN || 1);
-const COOLDOWN_MIN = Number(process.env.COOLDOWN_MIN || 90);
+const COOLDOWN_MIN = Number(process.env.COOLDOWN_MIN || 45);
 const DRY = process.env.DRY_RUN === '1';
 
 const MARK = path.join(STATE, 'context-guard.json');
@@ -87,6 +87,20 @@ function lastActionAt() {
 function readMark() {
   try { return JSON.parse(fs.readFileSync(MARK, 'utf8')); } catch { return {}; }
 }
+
+// 她欠着回复（有消息进来但还没回）的时候绝对不能换会话：
+// 换会话会把她正在生成/正在想的那一轮直接打断，表现就是"发了没理我"。
+function owesReply() {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(STATE, 'social-v2.json'), 'utf8'));
+    const c = (s.conversations || {})[KEY] || {};
+    const inc = Number(c.lastIncomingAt || 0);
+    const rep = Number(c.lastAiReplyAt || 0);
+    return inc > 0 && rep < inc;
+  } catch {
+    return false;
+  }
+}
 function writeMark(v) {
   try { fs.writeFileSync(MARK, JSON.stringify(v, null, 2)); } catch {}
 }
@@ -110,15 +124,15 @@ async function rotate() {
 
   const lines = recent
     .filter((m) => m && (m.plain || m.text))
-    .map((m) => `${m.isSelf ? '我' : '对方'}：${String(m.plain || m.text).replace(/\s+/g, ' ').slice(0, 80)}`)
+    .map((m) => `${m.isSelf ? '你' : '哥'}：${String(m.plain || m.text).replace(/\s+/g, ' ').slice(0, 80)}`)
     .slice(-20);
   const recap = lines.length
     ? [
         '你们刚才在聊（换个新会话继续，别提「换会话」这件事）：',
         ...lines,
         '',
-        '开工前先做一件事：把上面这些内容里**值得长期记住的事**（用户的偏好、正在忙的事、答应过的事、重要的人和日期）',
-        '用 qq_memory_append 记 1~3 条（memberImpression / activeTopic），记完再接着聊。不要向用户复述你在记什么。',
+        '开工前先做一件事：把上面这些内容里**值得长期记住的事**（哥的偏好、正在忙的事、答应过的事、重要的人和日期）',
+        '用 qq_memory_append 记 1~3 条（memberImpression / activeTopic），记完再接着聊。不要向哥复述你在记什么。',
       ].join('\n')
     : '';
 
@@ -204,6 +218,12 @@ async function tick() {
   // 现在硬上限不等，紧急线只等 5 分钟，普通情况仍按 COOLDOWN_MIN。
   const cooldownMin = critical ? 0 : (urgent ? 5 : COOLDOWN_MIN);
   if (cooldownMin > 0 && mark.lastRotateAt && Date.now() - mark.lastRotateAt < cooldownMin * 60000) return;
+
+  // 欠着回复就不换（这条比"省 token"重要：宁可多烧一点，也不能让她不吭声）
+  if (owesReply()) {
+    log(`上下文 ${Math.round(ctx)} 已超线，但还有消息没回，等她回完再换`);
+    return;
+  }
 
   log(`平均上下文 ${Math.round(ctx)} > ${ROTATE_AT}，准备换新会话（先存记忆和最近对话）`);
   if (DRY) { log('[dry-run] 不执行'); return; }

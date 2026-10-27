@@ -130,9 +130,27 @@ async function checkMemory() {
 }
 
 // ── 4) 出戏检测 ──────────────────────────────────────────────────
+// 只查「角色卡最后一次改完之后」的聊天。
+// 不然改了角色卡也永远在报旧账：2026-10-27 早上 07:19 那句「我是哥的 AI <BOT_NAME>」
+// 是改之前的，每天都会把这条历史拉出来报警，久了就没人看这个检查了。
+function roleCardMtime() {
+  const dir = path.join(BRIDGE, 'roles');
+  let max = 0;
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.md') || f.includes('.bak')) continue;
+      const t = fs.statSync(path.join(dir, f)).mtimeMs;
+      if (t > max) max = t;
+    }
+  } catch {}
+  return max;
+}
+
 function checkRoleBreak() {
-  console.log('\n=== 出戏检测（最近 3 天） ===');
-  // 注意别写死成「我是AI」：她实际会说「我是你的 AI 助手」，
+  const since = roleCardMtime();
+  const sinceText = since ? new Date(since).toLocaleString('zh-CN', { hour12: false }) : '（读不到角色卡时间）';
+  console.log(`\n=== 出戏检测（最近 3 天，只看角色卡改动 ${sinceText} 之后的） ===`);
+  // 注意别写死成「我是AI」：她实际说的是「我是哥的 AI <BOT_NAME>」，
   // 中间夹着字，简单正则抓不到，会漏报。
   const bad = /我是[^，。！？\n]{0,8}AI|作为[^，。！？\n]{0,6}AI|我是(个)?(程序|模型|机器人)|我毕竟是\s*AI/i;
   let hits = 0;
@@ -142,6 +160,11 @@ function checkRoleBreak() {
     if (!fs.existsSync(f)) continue;
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (!line.includes('**<BOT_NAME>**')) continue;
+      const m = line.match(/^-\s*(\d{1,2}):(\d{2})/);
+      if (m && since) {
+        const ts = new Date(`${d}T${String(m[1]).padStart(2, '0')}:${m[2]}:00+08:00`).getTime();
+        if (Number.isFinite(ts) && ts < since) continue; // 角色卡改之前的历史，不算
+      }
       if (bad.test(line)) { console.log('    ' + line.slice(0, 90)); hits++; }
     }
   }

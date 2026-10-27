@@ -6,7 +6,7 @@ singleInstance('cron');
  *
  * 到点执行：
  *   03:30  补丁自检
- *   04:00  维护（日志轮转 + 备份 + 加密同步到云盘）
+ *   04:00  维护（日志轮转 + 备份 + 加密同步 OneDrive）
  *   09:00  巡检
  *   21:00  巡检
  *   22:20  记忆整理
@@ -33,6 +33,7 @@ const CATCHUP_MIN = Math.max(30, Number(process.env.CATCHUP_MIN || 300));
 const JOBS = [
   { id: 'patch-check', at: '03:30', file: path.join(ROOT, 'patches', 'daily-check.mjs') },
   { id: 'maintenance', at: '04:00', file: path.join(ROOT, 'maintenance', 'maintenance.mjs') },
+  { id: 'like-card', at: '09:30', file: path.join(ROOT, 'like-card', 'like-card.mjs') },
   { id: 'patrol-morning', at: '09:00', file: path.join(ROOT, 'patrol', 'patrol.mjs') },
   { id: 'patrol-evening', at: '21:00', file: path.join(ROOT, 'patrol', 'patrol.mjs') },
   { id: 'self-check', at: '21:20', file: path.join(ROOT, 'self-check', 'self-check.mjs'), args: ['--fix'] },
