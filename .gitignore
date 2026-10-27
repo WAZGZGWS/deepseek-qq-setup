@@ -1,0 +1,40 @@
+# 运行时数据 —— 绝对不能提交
+state/
+*.lock
+*.log
+*.log.*
+*.bak
+*.bak2
+*.bak-*
+
+# 具体的人设（每个人自己写）
+roles/*.md
+!roles/README.md
+
+# 配置（含 QQ 号、token）
+config.json
+notify.json
+notify.local.json
+
+# 聊天归档（含真实对话）
+archive/
+chat-memory/
+backups/
+versions/
+
+# 密钥与凭证
+*credentials*
+*token*
+backup-pass.txt
+.credentials.yaml
+.env
+.env.*
+
+# 依赖
+node_modules/
+.npm-cache/
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
