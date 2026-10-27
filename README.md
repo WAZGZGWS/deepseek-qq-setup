@@ -47,6 +47,22 @@ DeepSeek Harness                        ← 真正说话的那层
 
 ## 部署
 
+### 0. 一键部署（先跑这个）
+
+双击仓库根目录的 **`install.cmd`**（会提权一次）。
+
+它会：检查 Node / DSH / NapCat / 桥接 → 把脚本复制到你指定的目录 → 按你的 QQ 号生成启动脚本 → 注册「全栈体检」计划任务（每 2 分钟自愈）→ 关掉自动睡眠和快速启动。
+
+**它不会装** Node、DSH、NapCat、桥接——这四样都得你自己装好，缺什么它会直接说缺什么，装完再跑一次即可。
+
+命令行用法：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1 -TargetDir D:\qq-bot-stack -OwnerQQ 123456789 -BotQQ 987654321
+```
+
+加 `-DryRun` 只看不改。
+
 ### 1. 装 NapCat
 
 1. 从 [NapCatQQ releases](https://github.com/NapNeko/NapCatQQ/releases) 下载 Shell 版
