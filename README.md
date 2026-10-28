@@ -76,7 +76,7 @@
 | 聊久了上下文越滚越大，一天烧七块钱 | `context-guard`：上下文超线就换新会话，换之前把记忆和最近 20 句交接过去 |
 | 换会话就失忆 | 四层记忆：长期事实 / 随身本 / 每日摘要 / 完整档案 |
 | 聊久了记忆越攒越脏（重复、出戏台词、占位符） | `memory-tidy` 每天清垃圾 + 合并重复，清完复查到干净，删什么都记账 |
-| 进程不知道什么时候就死了 | `supervisor` 管 8 个后台脚本，`stack-doctor` 盯着 QQ / 桥接 / DSH / 脚本 |
+| 进程不知道什么时候就死了 | `supervisor` 管 9 个后台脚本，`stack-doctor` 盯着 QQ / 桥接 / DSH / 脚本 |
 | 改了代码要手动重启 | 心跳锁 + 热重载，改文件 3 秒生效 |
 | 出问题没人知道 | `self-check` 每天自查，`stack-doctor` 每 2 分钟巡检 |
 | 余额耗尽了才发现 | `balance-watch` 每 30 分钟查一次，分四档提醒 |
@@ -93,7 +93,7 @@ qq-bridge (:3100 控制台)                    ← 把 QQ 消息翻译给 AI，�
 DeepSeek Harness                           ← AI 在这里说话（也在这里烧 token）
 
 旁边还有几个"看着它们的人"：
-  supervisor     管 8 个后台脚本（记忆/余额/定时/巡检…），崩了 5 秒后重启
+  supervisor     管 9 个后台脚本（记忆/余额/定时/巡检…），崩了 5 秒后重启
   stack-doctor   每 2 分钟体检一遍：QQ / 桥接 / DSH / 后台脚本，谁挂了拉谁
   stack-guard    更老的一层，10 秒看一眼 supervisor 和桥接（可选，一键部署不装）
 ```
@@ -189,7 +189,7 @@ DeepSeek Harness                           ← AI 在这里说话（也在这里
 ```
 整机已提交       8.6 GB / 16 GB
   └ 其中我们的： 708 MB（DSH 515 MB + QQ/NapCat 约 190 MB）
-后台脚本全部    每个 20~40 MB，8 个合计约 250 MB
+后台脚本全部    每个 20~40 MB，9 个合计约 280 MB
 ```
 
 ⚠️ **4 GB 内存的机器会比较紧**：Windows 自身 + DSH + NapCat 就要 6 GB 上下。建议 8 GB 起步。
@@ -325,7 +325,7 @@ npm init -y     # 如果你要用到 node_modules 里的东西
 
 | 脚本 | 频率 | 作用 |
 |---|---|---|
-| `supervisor` | 常驻 | 管 8 个 worker，崩溃 5 秒后重启（名单在 `supervisor/workers.mjs`，只有一份） |
+| `supervisor` | 常驻 | 管 9 个 worker，崩溃 5 秒后重启（名单在 `supervisor/workers.mjs`，只有一份） |
 | `stack-guard` | 常驻（可选） | 老的一层：10 秒看一眼 supervisor / 桥接。一键部署不装它，靠 stack-doctor 兜底 |
 | `stack-doctor` | 每 2 分钟（计划任务） | 全栈体检：QQ / 桥接 / DSH / 后台脚本，谁挂了拉谁 |
 | `like-card` | 每天 09:30 | 给主人名片点赞（纯 API，不花 token） |
@@ -338,6 +338,7 @@ npm init -y     # 如果你要用到 node_modules 里的东西
 | `session-janitor` | 每 60 分钟 | 清理闲置会话 + 老会话文件/附件（默认留 60/90 天，省空间） |
 | `budget-guard` | 每 30 分钟 | 超预算进省电模式 |
 | `balance-watch` | 每 30 分钟 | 余额四档提醒（带充值链接）、余额越低说话越少、静默时段不发 |
+| `peak-watch` | 每 10 分钟 | 高峰（全价）时段花得猛就提醒一句「省着点说」；优惠时段闭嘴，提醒本身不花 token |
 | `power-guard` | 每 60 秒 | 断电/睡眠前存档 |
 | `cron` | 每 30 秒 | 调度上面这些定时任务 |
 | `notify` | 按需 | 外部告警出口 |
@@ -419,6 +420,9 @@ npm init -y     # 如果你要用到 node_modules 里的东西
 
 脚本每 3 秒看一眼自己的文件有没有变（改了就退出），`supervisor` 5 秒后用新代码把它拉起来。**改完存盘，等 8 秒就生效。**
 
+盯的不只是自己：`lib/` 里的公共件、`supervisor/workers.mjs`（工人名单）也在监视范围内——改名单会让 supervisor 自己退出重读，新加的 worker 就会自动上线，不用手动重启。
+（这条是 2026-10-28 加 `peak-watch` 时补的：当时名单改了但 supervisor 没重启，新 worker 一直没起来。）
+
 ## 踩坑记录
 
 这些都是实际踩过的，写下来省你时间：
@@ -478,7 +482,7 @@ node self-check/self-check.mjs --fix    # 能修的自动修
 | 桥接 | `:3100` 能不能连上 | 重新拉起启动脚本 |
 | 桥接"假活" | NapCat 日志的"接收"时间 vs 桥接的 `lastIncomingAt` | 调 `/api/restart` 重启 |
 | DSH 本体 | `tasklist` 里有没有 `DeepSeek Harness.exe` | 直接启动 exe |
-| 后台脚本 | 8 个 worker 的锁有几个是新鲜的（5 分钟内），一半以上不新鲜就拉 supervisor | 重新拉起 supervisor |
+| 后台脚本 | 9 个 worker 的锁有几个是新鲜的（5 分钟内），一半以上不新鲜就拉 supervisor | 重新拉起 supervisor |
 
 **为什么是"跑完就退"，不是常驻进程**：
 
@@ -755,6 +759,10 @@ node tools\qq-login.mjs password    # 用存好的密码登回去
 | 一天 ~1 元 | 关掉主动开口 + 上下文再压 | 她基本只在被叫时说话 |
 
 长期事实（作息、口味、忌口）**不受影响**——那一层只在超出 2200 字预算时才砍最不重要的几条，平时不会因为省钱丢东西。
+
+**分时段省钱**：DeepSeek 有优惠时段（北京时间 **00:30~08:30**，聊天模型半价、推理模型更便宜），其余时间是全价。
+`peak-watch` 就是盯这个的：全价时段里每多花 1.5 元提醒你一句「省着点说」，两小时内不重复、一天最多 4 次；优惠时段完全不打扰（那会儿说便宜，鼓励说）。
+提醒直接走 NapCat 发消息，不经过模型，**提醒本身不花 token**。想改时段/频率看 `PEAK_FROM` / `PEAK_TO` / `PEAK_STEP`。
 
 ## 和其他方案比
 

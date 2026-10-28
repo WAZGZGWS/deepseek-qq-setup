@@ -17,6 +17,7 @@ export const WORKERS = [
   { name: 'janitor', file: path.join(ROOT, 'session-janitor', 'session-janitor.mjs') },
   { name: 'budget', file: path.join(ROOT, 'budget-guard', 'budget-guard.mjs') },
   { name: 'balance', file: path.join(ROOT, 'balance-watch', 'balance-watch.mjs') },
+  { name: 'peak', file: path.join(ROOT, 'peak-watch', 'peak-watch.mjs') },
   { name: 'context', file: path.join(ROOT, 'context-guard', 'context-guard.mjs') },
   { name: 'power', file: path.join(ROOT, 'power-guard', 'power-guard.mjs') },
 ];

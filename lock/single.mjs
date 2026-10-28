@@ -94,6 +94,13 @@ export function singleInstance(name, stateDir) {
         }
       } catch {}
 
+      // 还有「工人名单」：改了它必须让 supervisor 退出重读，否则新加的 worker 永远不会起来
+      // （2026-10-28 加 peak-watch 时就卡在这儿：文件改了、supervisor 没重启、名单没生效）
+      try {
+        const list = path.join(libDir, '..', 'supervisor', 'workers.mjs');
+        if (fs.existsSync(list) && !watched.includes(list)) watched.push(list);
+      } catch {}
+
       if (watched.length) {
         const mt = new Map(watched.map((p) => [p, fs.statSync(p).mtimeMs]));
         const timer = setInterval(() => {

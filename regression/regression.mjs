@@ -258,6 +258,19 @@ check('不会同时开两个 QQ 实例', () => {
   const ok = /function qqRunning\(/.test(doc) && /不再开第二个/.test(doc);
   return ok || 'stack-doctor 拉起 NapCat 前没检查 QQ 是否已经在跑';
 });
+check('高峰时段省钱提醒在位', () => {
+  // 2026-10-28 晚上加的：全价时段花得猛就提醒一句，优惠时段闭嘴。
+  const f = path.join(ROOT, 'peak-watch', 'peak-watch.mjs');
+  if (!fs.existsSync(f)) return '缺 peak-watch/peak-watch.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/inPeak\(/.test(t)) bad.push('没有时段判断');
+  if (!/PEAK_STEP/.test(t)) bad.push('没有花费档位');
+  if (!/readJson|MINE/.test(t)) bad.push('没有当天状态（会重复提醒）');
+  const list = fs.readFileSync(path.join(ROOT, 'supervisor', 'workers.mjs'), 'utf8');
+  if (!/name: 'peak'/.test(list)) bad.push('没注册进 supervisor 名单');
+  return bad.length === 0 || bad.join('；');
+});
 
 // ---- 输出 ----
 let failed = 0;
