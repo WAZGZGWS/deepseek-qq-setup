@@ -566,6 +566,9 @@ send_qzone_msg { content, ugc_right: 16, target_uins: ["主人的QQ"] }
 
 支持 `json` / `bark` / `dingtalk`。**没配 webhook 时消息会写进 `state/notify-pending.log` 排队，不是丢弃。**
 
+`stack-doctor` 判到「自动重启也救不回来」时会写 `state/ALERT-stack.txt` 并弹桌面窗，提示需要人来处理。
+**恢复后这份文件会自动撤掉**——不清的话，下次真出事你分不清是新告警还是上次的旧账（2026-10-28 踩过：11:01 的告警到 11:40 还躺着，而 11:29 早就恢复了）。
+
 ## 能做到什么 · 做不到什么 · 会出什么问题
 
 ### 一、它能做到的

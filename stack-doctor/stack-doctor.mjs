@@ -316,6 +316,14 @@ async function handle(state, name, up, restartFn, opts = {}) {
       const downMin = s.downSince ? Math.round((Date.now() - s.downSince) / 60000) : 0;
       log(`${label} 已恢复${downMin ? `（掉线 ${downMin} 分钟）` : ''}`);
       // 恢复不通知聊天：她自己接着聊就行，聊天里不出现任何运维说词。
+      // 但「需要人工」那个告警文件要撤掉，否则它一直躺在那儿，
+      // 下次真出事时你分不清是新告警还是上次没清的旧账（2026-10-28 踩过）。
+      // 只清自己写的：别的组件还没恢复时，别把它的告警也抹了。
+      if (s.alertedBy === label) {
+        try { fs.unlinkSync(ALERT_FILE); } catch {}
+        s.alertedBy = '';
+        s.alertedAt = 0;
+      }
     }
     s.fails = 0;
     s.downSince = 0;
@@ -338,6 +346,7 @@ async function handle(state, name, up, restartFn, opts = {}) {
       try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}
       desktopAlert(text);
       s.alertedAt = Date.now();
+      s.alertedBy = label;   // 记一笔：这份告警是谁写的，恢复时只撤自己那份
     }
     s.fails = 0;
     return;

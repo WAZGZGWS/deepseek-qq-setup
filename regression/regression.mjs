@@ -236,6 +236,12 @@ check('滴眼药水做完就不再提', () => {
   if (!/--selftest/.test(s)) bad.push('没有自测');
   return bad.length === 0 || bad.join('；');
 });
+check('告警文件在恢复后会撤掉', () => {
+  // 2026-10-28：11:01 写下的 ALERT-stack.txt 到 11:40 还在，谁也分不清是不是新告警。
+  const s = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  const ok = /alertedBy/.test(s) && /unlinkSync\(ALERT_FILE\)/.test(s);
+  return ok || 'stack-doctor 恢复时没有清 ALERT-stack.txt';
+});
 
 // ---- 输出 ----
 let failed = 0;
