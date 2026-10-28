@@ -292,7 +292,7 @@ npm init -y     # 如果你要用到 node_modules 里的东西
 
 ```
 1-启动NapCat.bat        ← 手动点，过 UAC
-2-启动桥接.bat          ← 或让 stack-guard 自动拉起
+2-启动桥接.bat          ← 起不来就等 stack-doctor 两分钟内拉一遍
 20-supervisor.bat       ← 管后台脚本
 ```
 
@@ -300,8 +300,8 @@ npm init -y     # 如果你要用到 node_modules 里的东西
 
 | 脚本 | 频率 | 作用 |
 |---|---|---|
-| `supervisor` | 常驻 | 管 7 个 worker，崩溃 5 秒后重启 |
-| `stack-guard` | 常驻 | 守护桥接 + supervisor |
+| `supervisor` | 常驻 | 管 8 个 worker，崩溃 5 秒后重启（名单在 `supervisor/workers.mjs`，只有一份） |
+| `stack-guard` | 常驻（可选） | 老的一层：10 秒看一眼 supervisor / 桥接。一键部署不装它，靠 stack-doctor 兜底 |
 | `stack-doctor` | 每 2 分钟（计划任务） | 全栈体检：QQ / 桥接 / DSH / 后台脚本，谁挂了拉谁 |
 | `like-card` | 每天 09:30 | 给主人名片点赞（纯 API，不花 token） |
 | `eye-drop` | 常驻（每分钟） | 按「主人当天第一句话」的时间排滴眼药水提醒（见下） |
@@ -400,7 +400,7 @@ node self-check/self-check.mjs --fix    # 能修的自动修
 | 桥接 | `:3100` 能不能连上 | 重新拉起启动脚本 |
 | 桥接"假活" | NapCat 日志的"接收"时间 vs 桥接的 `lastIncomingAt` | 调 `/api/restart` 重启 |
 | DSH 本体 | `tasklist` 里有没有 `DeepSeek Harness.exe` | 直接启动 exe |
-| 后台脚本 | 7 个 worker 锁有几个是新鲜的（5 分钟内） | 重新拉起 supervisor |
+| 后台脚本 | 8 个 worker 的锁有几个是新鲜的（5 分钟内），一半以上不新鲜就拉 supervisor | 重新拉起 supervisor |
 
 **为什么是"跑完就退"，不是常驻进程**：
 
@@ -642,20 +642,18 @@ send_qzone_msg { content, ugc_right: 16, target_uins: ["主人的QQ"] }
 自带的检查工具：
 
 ```powershell
-node tools/sync-check.mjs --live E:\qq-bot-stack --repo E:\qq-bot-stack-os --names "你的角色名,昵称"
+node tools/sync-check.mjs --live E:\qq-bot-stack --repo E:\qq-bot-stack-os
 ```
 
-它会把本机的真实值（安装路径、QQ 号、角色名）替换成仓库里的占位符，再逐字节比对：
+它会把本机的真实值（安装路径、QQ 号、角色名、昵称）替换成仓库里的占位符，再逐字节比对。
+名字能从 `config.json` 和角色卡里自动认出来，认不出的再用 `--names "妹妹,大肥鱼"` 补。
 
 ```
-内容不一致（需要双向同步）（2）
+内容不一致（需要双向同步）（1）
   context-guard\context-guard.mjs
-  self-check\self-check.mjs
-只在仓库里有（本机缺）（7）
-  install.ps1  ...
-只在本机有（仓库缺）（30）
-  3-keep-awake-settings.ps1  ...
 ```
+
+**没有内容不一致就退出码 0**，可以直接接进脚本当闸门；「本机多出几个老文件」不算漂移，仓库本来就不收它们。
 
 **看到不一致先想清楚哪边新**，再同步，别盲目覆盖。
 
@@ -697,6 +695,9 @@ archive/*
 `2-启动桥接.bat`、`stack-doctor.cmd` 这类启动器，本机有一份、`install.ps1` 里还生成一份模板。改了一个另一个不改，新装的人拿到的是旧行为。
 
 改启动器时，两处一起看。
+
+能收的都收成一份了：后台工人名单现在只在 `supervisor/workers.mjs`，supervisor 和 stack-doctor 都 import 它，加人只改一处。
+（这条就是被 `eye-drop` 教会的：加完 supervisor 忘了改 doctor 那份，于是它死了也没人报。）
 
 ## 目录结构
 

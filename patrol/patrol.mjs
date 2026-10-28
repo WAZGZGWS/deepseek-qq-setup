@@ -17,7 +17,6 @@ const ROOT = path.join(HERE, '..');
 const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
 const STATE = path.join(BRIDGE, 'state');
 const REPORTS = path.join(ROOT, 'reports');
-const OWNER = YOUR_QQ;
 const BALANCE_WARN = Number(process.env.BALANCE_WARN || 5);
 
 const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });

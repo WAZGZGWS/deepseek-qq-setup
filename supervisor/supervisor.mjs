@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { singleInstance } from '../lock/single.mjs';
+import { WORKERS } from './workers.mjs';
 singleInstance('supervisor');
 /**
  * supervisor —— 一个进程管住所有后台工人
@@ -7,7 +8,7 @@ singleInstance('supervisor');
  * 为什么需要它：DSH 重启会把挂在它下面的进程全带走；而计划任务只在登录时跑一次。
  * 由登录启动的本进程独立于 DSH，负责把工人们拉起来并在崩溃后 5 秒重试。
  *
- * 管理：cron / archive / session-janitor / budget-guard / balance-watch / context-guard / power-guard
+ * 管哪些工人写在 workers.mjs 里（stack-doctor 也读那份，省得两边各记一份）
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -16,17 +17,6 @@ import path from 'node:path';
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const ROOT = path.join(HERE, '..');
 const STATE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state');
-
-const WORKERS = [
-  { name: 'cron', file: path.join(ROOT, 'cron', 'cron.mjs') },
-  { name: 'archive', file: path.join(ROOT, 'archive', 'collector.mjs') },
-  { name: 'eye-drop', file: path.join(ROOT, 'eye-drop', 'eye-drop.mjs') },
-  { name: 'janitor', file: path.join(ROOT, 'session-janitor', 'session-janitor.mjs') },
-  { name: 'budget', file: path.join(ROOT, 'budget-guard', 'budget-guard.mjs') },
-  { name: 'balance', file: path.join(ROOT, 'balance-watch', 'balance-watch.mjs') },
-  { name: 'context', file: path.join(ROOT, 'context-guard', 'context-guard.mjs') },
-  { name: 'power', file: path.join(ROOT, 'power-guard', 'power-guard.mjs') },
-];
 
 const procs = new Map();
 
@@ -90,7 +80,7 @@ function start(worker) {
   });
 }
 
-log('总管启动，接管 7 个后台工人');
+log(`总管启动，接管 ${WORKERS.length} 个后台工人`);
 for (const w of WORKERS) start(w);
 
 process.on('exit', () => {

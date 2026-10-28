@@ -40,6 +40,21 @@ try {
   const cur = JSON.parse(fs.readFileSync(path.join(get('live', '.'), 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state', 'current-role.json'), 'utf8'));
   if (cur.role) NAMES.push(String(cur.role));
 } catch {}
+// 角色卡文件名也算名字来源：roles/妹妹.md → 妹妹（昵称之类的还得靠 --names）
+for (const sub of ['roles', path.join('dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'roles')]) {
+  try {
+    for (const f of fs.readdirSync(path.join(get('live', '.'), sub))) {
+      if (f.toLowerCase().endsWith('.md') && f.toLowerCase() !== 'readme.md') NAMES.push(path.parse(f).name);
+    }
+  } catch {}
+}
+// 桥接配置里「必须回复」的关键词，通常就是她的名字/昵称（大肥鱼这种）
+try {
+  const cfg = JSON.parse(fs.readFileSync(path.join(get('live', '.'), 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'config.json'), 'utf8'));
+  for (const k of cfg.social && cfg.social.mustReplyKeywords ? cfg.social.mustReplyKeywords : []) {
+    if (/^[\u4e00-\u9fa5]{2,8}$/.test(k)) NAMES.push(k);
+  }
+} catch {}
 
 if (!get('repo')) {
   console.error('用法: node tools/sync-check.mjs --live <部署目录> --repo <仓库目录> [--verbose]');
@@ -130,9 +145,13 @@ for (const f of liveFiles) {
 }
 
 // 反向：仓库有、本机没有的脚本
+// 安装器 / 维护工具本来就只放仓库，本机不装，不算漂移
+const REPO_ONLY_OK = [/^install\.(cmd|ps1)$/, /^tools[\\/]/, /^readme\.md$/i, /^license$/i, /[\\/]run\.cmd$/];
 for (const f of walk(REPO)) {
   const rel = path.relative(REPO, f);
-  if (!fs.existsSync(path.join(LIVE, rel))) onlyRepo.push(rel);
+  if (fs.existsSync(path.join(LIVE, rel))) continue;
+  if (REPO_ONLY_OK.some((re) => re.test(rel))) continue;
+  onlyRepo.push(rel);
 }
 
 const show = (title, list) => {
@@ -141,8 +160,8 @@ const show = (title, list) => {
   for (const x of list.sort()) console.log('  ' + x);
 };
 
-if (!drift.length && !onlyLive.length && !onlyRepo.length) {
-  if (VERBOSE) console.log('一致：本机与仓库没有漂移');
+if (!drift.length && !onlyRepo.length) {
+  if (VERBOSE) console.log(`一致：本机与仓库没有漂移${onlyLive.length ? `（本机多 ${onlyLive.length} 个老文件，仓库不收）` : ''}`);
   process.exit(0);
 }
 
@@ -152,7 +171,11 @@ if (ids.owner) console.log(`按占位符替换：主人 QQ=${ids.owner}${ids.bot
 
 show('内容不一致（需要双向同步）', drift);
 show('只在仓库里有（本机缺）', onlyRepo);
-show('只在本机有（仓库缺）', onlyLive);
+show('只在本机有（仓库没收录，多为老部署遗留）', onlyLive);
+
+if (drift.length) {
+  console.log('\n提示：只差几处昵称/人名时，用 --names 妹妹,大肥鱼 补上再比一次，别急着手改。');
+}
 
 console.log('\n提示：不一致的那几个，先看清哪边更新，再把新的那份同步过去，别盲目覆盖。');
 process.exit(1);

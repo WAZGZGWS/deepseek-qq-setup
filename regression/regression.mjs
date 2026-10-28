@@ -158,8 +158,13 @@ check('stack-doctor 存在', () => fs.existsSync(path.join(ROOT, 'stack-doctor',
 check('like-card 存在', () => fs.existsSync(path.join(ROOT, 'like-card', 'like-card.mjs')));
 check('eye-drop 存在', () => fs.existsSync(path.join(ROOT, 'eye-drop', 'eye-drop.mjs')));
 check('eye-drop 已注册进 supervisor', () => {
-  const s = fs.readFileSync(path.join(ROOT, 'supervisor', 'supervisor.mjs'), 'utf8');
-  return /name:\s*'eye-drop'/.test(s) || 'supervisor 里没注册，它不会自己起来';
+  // 名单在 supervisor/workers.mjs（supervisor 和 stack-doctor 共用这份）
+  const s = fs.readFileSync(path.join(ROOT, 'supervisor', 'workers.mjs'), 'utf8');
+  return /name:\s*'eye-drop'/.test(s) || 'workers.mjs 里没注册，它不会自己起来';
+});
+check('stack-doctor 用同一份工人名单', () => {
+  const s = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  return /from '\.\.\/supervisor\/workers\.mjs'/.test(s) || 'stack-doctor 又自己写了一份名单，早晚和 supervisor 对不上';
 });
 check('滴眼药水改为按醒来时间排（固定任务应已停用）', () => {
   const f = path.join(BRIDGE, 'state', 'scheduler.json');

@@ -21,6 +21,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { WORKER_NAMES } from '../supervisor/workers.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -36,7 +37,7 @@ const BOOT_BAT = process.env.NAPCAT_BOOT_BAT || path.join(ROOT, 'napcat-boot.bat
 const BRIDGE_BAT = process.env.BRIDGE_BAT || path.join(ROOT, '2-启动桥接.bat');
 const SUPERVISOR_BAT = process.env.SUPERVISOR_BAT || path.join(ROOT, '20-supervisor.bat');
 const WORKER_STATE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state');
-const WORKER_NAMES = ['archive', 'balance', 'budget', 'context', 'cron', 'janitor', 'power'];
+// 工人名单来自 supervisor/workers.mjs —— 那边加人，这边自动就数到，不用改第二处
 const DSH_EXE = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'DeepSeek Harness', 'DeepSeek Harness.exe');
 const BRIDGE_CFG = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'config.json');
 
@@ -144,7 +145,7 @@ function probePort(port, host = '127.0.0.1', timeoutMs = 3000) {
 }
 
 /**
- * 后台脚本（7 个 worker）活着几个。
+ * 后台脚本活着几个：数 state/ 里新鲜的心跳锁。
  *
  * supervisor 自己不写心跳（supervisor.lock 永远是旧的），
  * 但每个 worker 每 20 秒刷新自己的锁，所以数「新鲜的锁」就能判断这一层死没死。
@@ -400,11 +401,11 @@ async function main() {
     manualHint: 'DeepSeek Harness 起不来，需要你看一眼。',
   });
 
-  // 4. 后台脚本（supervisor + 7 个 worker）
-  //    supervisor 自己不留心跳，但 worker 每 20 秒刷锁；7 个里有 3 个以上不新鲜
+  // 4. 后台脚本（supervisor + 一群 worker）
+  //    supervisor 自己不留心跳，但 worker 每 20 秒刷锁；不新鲜的超过一半
   //    就说明这一层已经塌了（通常是 supervisor 静默退出），重新拉一遍。
   const fresh = freshWorkers();
-  await handle(state, 'workers', fresh >= 5, () => {
+  await handle(state, 'workers', fresh >= Math.ceil(WORKER_NAMES.length / 2), () => {
     if (!fs.existsSync(SUPERVISOR_BAT)) return false;
     return launchAsUserVia(SUPERVISOR_BAT, '-y');
   }, {

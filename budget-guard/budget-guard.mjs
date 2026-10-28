@@ -21,7 +21,15 @@ const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z
 const ROOT = path.join(HERE, '..');
 const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
 const STATE = path.join(BRIDGE, 'state');
-const OWNER = YOUR_QQ;
+// 主人的 QQ 号从桥接 config.json 里读 —— 下载的人不用手改这里
+function resolveOwner(bridgeDir) {
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(bridgeDir, 'config.json'), 'utf8'));
+    if (Number(c.ownerQQ)) return Number(c.ownerQQ);
+  } catch {}
+  return 0;
+}
+const OWNER = resolveOwner(BRIDGE);
 const BUDGET = Number(process.env.DAILY_BUDGET || 5);
 const CHECK_MIN = Math.max(5, Number(process.env.CHECK_MIN || 30));
 const PRICE = { cacheHit: 0.2, cacheMiss: 2.0, output: 8.0 };
@@ -78,6 +86,7 @@ async function api(pathname, options = {}) {
 }
 
 async function notify(text) {
+  if (!OWNER) return; // 没配 ownerQQ 就只写日志，不去撞 NapCat
   try {
     await fetch('http://127.0.0.1:3000/send_private_msg', {
       method: 'POST',
