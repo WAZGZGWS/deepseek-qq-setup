@@ -496,7 +496,7 @@ node tools/sync-check.mjs --live E:\qq-bot-stack --repo E:\qq-bot-stack-os --nam
 
 ### ② 脱敏会把代码改坏
 
-把 `妹妹` 替换成 `<BOT_NAME>` 的时候，**代码里的文件名也会被替换**：
+把 角色名 替换成 `<BOT_NAME>` 的时候，**代码里的文件名也会被替换**：
 
 ```js
 const roleFile = path.join(BRIDGE, 'roles', '<BOT_NAME>.md');   // ← 文件根本不存在
