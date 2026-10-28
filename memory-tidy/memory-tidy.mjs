@@ -461,14 +461,14 @@ async function aiJudge(out) {
   const key = readKey();
   if (!key) { log('没有 API key，跳过 AI 复审'); return []; }
 
-  const prompt = `下面是一个聊天机器人的「记忆」。请找出**重复**和**明显出戏/空话**的条目。
+  const prompt = `下面是一个聊天机器人的「记忆」。请只找出**重复**的条目。
 
 规则：
 1. 只挑你有把握的；拿不准一律不删。宁可漏，不可错。
-2. 理由只能是两种：「重复」（必须同时给出 dupOf，指向同一类里更完整的那条的 id）或「出戏」（明显是 AI 自我说明、系统话术、无信息客套）。
-3. 长期事实（F 开头）**只允许因为「重复」删除**，不许因为"不重要"删。
-4. 出戏/空话一类最多挑 2 条。
-5. 只输出 JSON，不要解释：{"delete":[{"id":"H2","dupOf":"H1","why":"重复"},{"id":"T5","why":"出戏"}]}
+2. 判断标准：两条说的是**同一件事**，只是换了说法或一条更全。只是话题相邻、主角相同，不算重复。
+3. 必须给出 dupOf，指向同一类里更完整的那条的 id。
+4. 你**不许**判断"重要不重要""有没有意思"——那种事轮不到你。
+5. 只输出 JSON，不要解释：{"delete":[{"id":"T5","dupOf":"T3"}]}
 6. 没有可删的就输出 {"delete":[]}
 
 条目：
@@ -500,23 +500,20 @@ ${items.map((x) => `${x.id}｜${x.text}`).join('\n')}`;
     for (const d of list) {
       const it = byId.get(String(d.id || ''));
       if (!it) continue;
-      const why = String(d.why || '');
-      if (!['重复', '出戏'].includes(why)) continue;
-      if (it.cat === 'fact' && why !== '重复') continue;
-      if (why === '重复') {
-        const dup = byId.get(String(d.dupOf || ''));
-        if (!dup || dup.cat !== it.cat || dup.id === it.id) continue;
-        // 硬约束：说的得真是同一件事。模型 2026-10-28 把「问眼药水」判成「好笑的」
-        // 的重复，差点删掉一条真记忆 —— 从那以后必须自己再验一遍字面重合度。
-        if (overlap(it.text, dup.text) < 0.2) {
-          log(`AI 说 ${it.id} 与 ${dup.id} 重复，但字面重合度只有 ${overlap(it.text, dup.text).toFixed(2)}，不删`);
-          continue;
-        }
+      // 只认「重复」，并且必须指出跟谁重复；"出戏/空话"这类判断交给上面的规则，
+      // 不让模型碰 —— 2026-10-28 它把一个正经话题（炒饭的照片）标成了"空话"。
+      const dup = byId.get(String(d.dupOf || ''));
+      if (!dup || dup.cat !== it.cat || dup.id === it.id) continue;
+      // 硬约束：说的得真是同一件事。模型 2026-10-28 把「问眼药水」判成「好笑的」
+      // 的重复，差点删掉一条真记忆 —— 从那以后必须自己再验一遍字面重合度。
+      if (overlap(it.text, dup.text) < 0.2) {
+        log(`AI 说 ${it.id} 与 ${dup.id} 重复，但字面重合度只有 ${overlap(it.text, dup.text).toFixed(2)}，不删`);
+        continue;
       }
       perCat[it.cat] = perCat[it.cat] || { n: 0, picked: [] };
       perCat[it.cat].n += 1;
       perCat[it.cat].picked.push(it);
-      picked.push({ ...it, why: why === '重复' ? `AI：与 ${d.dupOf} 重复` : 'AI：出戏/空话' });
+      picked.push({ ...it, why: `AI：与 ${d.dupOf} 重复` });
     }
 
     // 每类最多删 30%，facts 至少留 3 条
