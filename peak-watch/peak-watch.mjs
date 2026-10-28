@@ -10,11 +10,11 @@ singleInstance('peak');
  *
  * 做法（每 10 分钟一次，不花 token）：
  *   1. 从 token-usage.jsonl 算今天花了多少（和 budget-guard 用同一套价目）
- *   2. 只在高峰时段（默认 08:30~00:30）提醒；优惠时段闭嘴
+ *   2. 只在高峰时段（默认 08:30~23:30）提醒；优惠时段和半夜都不打扰
  *   3. 花费每多花一档（默认 1.5 元）提醒一次，两次之间至少隔 2 小时，一天最多 4 次
  *   4. 提醒直接走 NapCat 发私聊，不经过模型 —— 提醒本身不烧钱
  *
- * 环境变量：PEAK_FROM / PEAK_TO（默认 08:30 / 00:30）
+ * 环境变量：PEAK_FROM / PEAK_TO（默认 08:30 / 23:30，半夜不打扰）
  *          PEAK_STEP（每多花几元提醒一次，默认 1.5）
  *          PEAK_COOLDOWN_MIN（两次间隔，默认 120）
  *          PEAK_MAX_PER_DAY（一天最多几次，默认 4）
@@ -34,7 +34,7 @@ const LOG_FILE = path.join(STATE, 'peak-watch.log');
 const USAGE = path.join(STATE, 'token-usage.jsonl');
 
 const PEAK_FROM = process.env.PEAK_FROM || '08:30';
-const PEAK_TO = process.env.PEAK_TO || '00:30';
+const PEAK_TO = process.env.PEAK_TO || '23:30';
 const STEP = Number(process.env.PEAK_STEP || 1.5);
 const START_AT = Number(process.env.PEAK_START_AT || 2);
 const COOLDOWN_MIN = Math.max(30, Number(process.env.PEAK_COOLDOWN_MIN || 120));

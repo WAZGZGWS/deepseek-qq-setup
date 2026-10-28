@@ -358,6 +358,7 @@ npm init -y     # 如果你要用到 node_modules 里的东西
 | 每天几点跑哪些定时任务 | `cron/cron.mjs` 顶部那张表（03:30 补丁、04:00 备份、09:00 巡检…） | 改完 3 秒自动重启 |
 | 滴眼药水提醒的节奏 | `EYE_DROP_OFFSETS`（默认 `2,10` 分钟，共 2 条）、`EYE_DROP_FROM_HOUR`~`EYE_DROP_TO_HOUR`（默认 4~12 点） | 改完 3 秒自动重启 |
 | 余额提醒门槛 | `THRESHOLD_CNY`（最高档，默认 10 元），或 `balance-watch.json` | 下次检查（≤30 分钟） |
+| 省钱提醒的时段和频率 | `PEAK_FROM` / `PEAK_TO`（默认 08:30~23:30）、`PEAK_STEP`（每多花 1.5 元提醒）、`PEAK_COOLDOWN_MIN` / `PEAK_MAX_PER_DAY` | 改完 3 秒自动重启 |
 | 开放群聊 | 桥接 `config.json` → `allow.groups`（默认空 = 只接私聊） | 重启桥接 |
 | 她能调用哪些工具 | 桥接 `config.json` → `socialV2.tools` | 重启桥接 |
 
@@ -761,7 +762,7 @@ node tools\qq-login.mjs password    # 用存好的密码登回去
 长期事实（作息、口味、忌口）**不受影响**——那一层只在超出 2200 字预算时才砍最不重要的几条，平时不会因为省钱丢东西。
 
 **分时段省钱**：DeepSeek 有优惠时段（北京时间 **00:30~08:30**，聊天模型半价、推理模型更便宜），其余时间是全价。
-`peak-watch` 就是盯这个的：全价时段里每多花 1.5 元提醒你一句「省着点说」，两小时内不重复、一天最多 4 次；优惠时段完全不打扰（那会儿说便宜，鼓励说）。
+`peak-watch` 就是盯这个的：**提醒窗口默认 08:30~23:30**（半价时段和半夜都不打扰），窗口里每多花 1.5 元提醒你一句「省着点说」，两小时内不重复、一天最多 4 次。
 提醒直接走 NapCat 发消息，不经过模型，**提醒本身不花 token**。想改时段/频率看 `PEAK_FROM` / `PEAK_TO` / `PEAK_STEP`。
 
 ## 和其他方案比
@@ -880,6 +881,7 @@ archive/*
 ├── notify/           告警出口
 ├── patches/          补丁自检
 ├── patrol/           每日巡检（09:00 / 21:00）
+├── peak-watch/       高峰时段省钱提醒（花得猛才开口）
 ├── power-guard/      断电保护
 ├── regression/       回归测试
 ├── roles/            人设（自己写）
