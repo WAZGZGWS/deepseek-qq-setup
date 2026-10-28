@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, BRIDGE, portOpen } from '../lib/base.mjs';
+import { ROOT, BRIDGE, portOpen, chatKey } from '../lib/base.mjs';
 
 const STARTUP = path.join(process.env.APPDATA || '', 'Microsoft/Windows/Start Menu/Programs/Startup');
 
@@ -102,7 +102,7 @@ check('自启项 >= 2（其余由计划任务/supervisor 负责）', () => start
 let memoryOk = false;
 try {
   const token = read(path.join(BRIDGE, 'state', 'console-token')).trim();
-  const res = await fetch('http://127.0.0.1:3100/api/socialV2/memory?key=' + encodeURIComponent(cfg.ownerQQ ? `private:${cfg.ownerQQ}` : 'private:YOUR_QQ'), { headers: { 'x-console-token': token } });
+  const res = await fetch('http://127.0.0.1:3100/api/socialV2/memory?key=' + encodeURIComponent(chatKey()), { headers: { 'x-console-token': token } });
   const j = await res.json();
   const raw = j.raw || {};
   const n = (raw.activeTopics || []).length + Object.keys(raw.memberImpressions || {}).length;

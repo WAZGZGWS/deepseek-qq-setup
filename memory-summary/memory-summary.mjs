@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ROOT, stamp } from '../lib/base.mjs';
+import { ROOT, STATE, stamp, readJson } from '../lib/base.mjs';
 
 const ARCHIVE = path.join(ROOT, 'archive', 'logs');
 const OUT = path.join(ROOT, 'archive', 'summary');
@@ -83,7 +83,11 @@ async function summarize(dayStr, bodies) {
   const tail = bodies.slice(-120);
   const sample = [...new Set([...head, ...tail])].join('\n');
 
-  const prompt = `下面是${dayStr}这一天，一个<BOT_NAME>（<BOT_NAME>）和哥哥的聊天片段。请提炼 3~4 条「今天新增、值得长期记住」的要点，每条一行，不超过 30 字。
+  // 角色名从 state/current-role.json 读：仓库里脱敏成 <BOT_NAME>，本机是真名。
+  // 写死占位符的后果见过一次（2026-10-28）：模型收到「一个<BOT_NAME>（<BOT_NAME>）和哥哥」。
+  const roleName = readJson(path.join(STATE, 'current-role.json'), {}).role || '她';
+
+  const prompt = `下面是${dayStr}这一天，${roleName}和哥哥的聊天片段。请提炼 3~4 条「今天新增、值得长期记住」的要点，每条一行，不超过 30 字。
 
 规则：
 - 只写事实和偏好，不写评价、不总结心情、不用「记录显示」这类词

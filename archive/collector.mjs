@@ -76,6 +76,29 @@ function inferLastTime(day) {
   } catch { return 0; }
 }
 
+/**
+ * 她自己的昵称：开机问一次 NapCat（get_login_info 里有 nickname），问不到用「机器人」。
+ *
+ * 这里**绝不能写死**：仓库要脱敏成 <BOT_NAME>，本机要真名。写死的结果是
+ * 2026-10-28 那次 —— 把仓库的脱敏版同步到本机，档案里她的话全变成「**<BOT_NAME>**」，
+ * 整整一天的记录都成了占位符。名字只能运行时取。
+ */
+let selfName = '';
+async function resolveSelfName() {
+  try {
+    const r = await fetch('http://127.0.0.1:3000/get_login_info', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(5000),
+    });
+    const j = await r.json();
+    const n = String(j?.data?.nickname || '').trim();
+    if (n) selfName = n;
+  } catch {}
+  if (!selfName) selfName = process.env.ARCHIVE_SELF_NAME || '机器人';
+}
+
 async function tick() {
   const r = await fetch(`http://127.0.0.1:3100/api/socialV2/recent?key=${encodeURIComponent(KEY)}&limit=80`, {
     headers: { 'x-console-token': token() },
@@ -117,7 +140,7 @@ async function tick() {
     seen.add(key);
     added += 1;
     maxTime = Math.max(maxTime, mt);
-    const who = m.isSelf ? '<BOT_NAME>' : (m.isOwner ? '哥' : (m.sender || m.userId || '?'));
+    const who = m.isSelf ? selfName : (m.isOwner ? '哥' : (m.sender || m.userId || '?'));
     const text = clean(m.plain || m.text);
     const t = m.time ? hhmm(m.time) : '';
     lines.push(`- ${t} **${who}**：${text}`);
@@ -139,6 +162,7 @@ async function tick() {
 
 const ONCE = process.argv.includes('--once');
 
+await resolveSelfName();
 log(`聊天归档${ONCE ? '（单次）' : ''}启动：${KEY} → ${OUT}，每 ${INTERVAL / 1000}s`);
 await tick().catch((e) => log('首次归档失败:', e.message));
 if (ONCE) process.exit(0);

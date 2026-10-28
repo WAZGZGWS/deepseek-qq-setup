@@ -712,6 +712,15 @@ const roleFile = path.join(BRIDGE, 'roles', '<BOT_NAME>.md');   // ← 文件根
 - 测试里不要写死人设文件名，改成自动发现（`roles/` 下第一个非 README 的 `.md`）
 - 提示语里的路径别用 `<STACK_ROOT>` 这种占位符，改成「安装目录里的 xxx」，否则用户看到会懵
 
+**最阴的一次（2026-10-28）**：脱敏后的文件被同步回本机，`archive/collector.mjs` 里成了 `m.isSelf ? '<BOT_NAME>'`，于是当天档案里她说的每句话都写成 `**<BOT_NAME>**`；`memory-summary` 的提示词也变成「一个<BOT_NAME>（<BOT_NAME>）和哥哥」。
+
+所以**脱敏只该发生在仓库那一侧**，而且运行时才需要的名字一律运行时取：
+
+- `archive/collector.mjs` 问 NapCat 的 `get_login_info` 要昵称，问不到用「机器人」
+- `memory-summary` 读 `state/current-role.json` 的 `role`
+
+判断标准很简单：**这个值会出现在运行结果里吗？** 会 → 运行时取；只在仓库里当占位符 → 才写 `<BOT_NAME>`。
+
 ### ③ `.gitignore` 整目录排除会吞掉必需文件
 
 ```
