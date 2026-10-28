@@ -46,6 +46,10 @@ const MAX_PER_HOUR = Number(process.env.MAX_PER_HOUR || 4);
 const COOLDOWN_MS = Number(process.env.COOLDOWN_SEC || 150) * 1000;
 const ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 const HOUR = 3600 * 1000;
+// 重试窗口：原来是「每小时最多 4 次」，等于整夜每小时内都会新开 4 个二维码窗口。
+// 改成 6 小时内最多 4 次：夜里票据失效时只会弹 4 次，不会刷屏。
+const RETRY_WINDOW_H = Number(process.env.RETRY_WINDOW_H || 6);
+const RETRY_WINDOW = RETRY_WINDOW_H * HOUR;
 
 function stamp() {
   return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
@@ -302,7 +306,7 @@ async function handle(state, name, up, restartFn, opts = {}) {
     }
     s.fails = 0;
     s.downSince = 0;
-    s.starts = s.starts.filter((t) => t > Date.now() - HOUR);
+    s.starts = s.starts.filter((t) => t > Date.now() - RETRY_WINDOW);
     return;
   }
 
@@ -313,11 +317,11 @@ async function handle(state, name, up, restartFn, opts = {}) {
 
   if (s.fails < FAIL_LIMIT) return;
 
-  s.starts = s.starts.filter((t) => t > Date.now() - HOUR);
+  s.starts = s.starts.filter((t) => t > Date.now() - RETRY_WINDOW);
   if (s.starts.length >= MAX_PER_HOUR) {
-    log(`${label} 一小时内重启 ${s.starts.length} 次仍失败，停止重试`);
+    log(`${label} 最近 ${RETRY_WINDOW_H} 小时重启 ${s.starts.length} 次仍失败，停止重试（大概率需要人工扫码）`);
     if (Date.now() - s.alertedAt > ALERT_COOLDOWN_MS) {
-      const text = `${label} 反复掉线，自动重启已试 ${s.starts.length} 次都没成功。\n\n` + (opts.manualHint || '需要人工看一下。');
+      const text = `${label} 反复掉线，${RETRY_WINDOW_H} 小时内自动重启试了 ${s.starts.length} 次都没成功。\n\n` + (opts.manualHint || '需要人工看一下。');
       try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}
       desktopAlert(text);
       s.alertedAt = Date.now();
@@ -335,7 +339,7 @@ async function handle(state, name, up, restartFn, opts = {}) {
   if (await restartFn()) {
     s.lastStart = Date.now();
     s.starts.push(Date.now());
-    log(`${label} 已拉起（本小时第 ${s.starts.length} 次）`);
+    log(`${label} 已拉起（近 ${RETRY_WINDOW_H} 小时第 ${s.starts.length} 次）`);
   }
   s.fails = 0;
 }
@@ -367,10 +371,13 @@ async function main() {
   // 2.5 桥接「假活」：端口在、进程在、控制台也能调，但消息不处理。
   //     NapCat 日志里 1 小时内有收到私聊，桥接记录的 lastIncomingAt 却落后 5 分钟以上 → 判定卡住。
   const napcatDm = lastNapcatDmMs();
+  const bridgeDm = bridgeLastIncomingMs();
   let stuck = false;
-  if (napcatDm && Date.now() - napcatDm < 60 * 60 * 1000) {
-    const lagMin = (napcatDm - bridgeLastIncomingMs()) / 60000;
-    if (lagMin > 5) {
+  // 桥接一次消息都没见过（0）时不能比：差值会等于"从 1970 年到现在"，
+  // 2026-10-28 早上就因此误判成「29885746 分钟前的消息没处理」，白重启了一次桥接。
+  if (napcatDm && bridgeDm > 0 && Date.now() - napcatDm < 60 * 60 * 1000) {
+    const lagMin = (napcatDm - bridgeDm) / 60000;
+    if (lagMin > 5 && lagMin < 24 * 60) {
       stuck = true;
       log(`NapCat ${Math.round(lagMin)} 分钟前收到过私聊，桥接没处理 → 判定假活`);
     }

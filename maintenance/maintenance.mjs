@@ -51,7 +51,16 @@ const KEEP_LOGS = 5;
 const KEEP_BACKUPS = 7;
 
 function log(...a) {
-  console.log(`[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`);
+  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  // 必须落文件：supervisor 拉起时 stdio 是 ignore，只 console.log 等于什么都没留下，
+  // 备份到底成没成功根本查不到（2026-10-28 实际踩到）
+  try { console.log(line); } catch {}
+  try {
+    fs.mkdirSync(STATE, { recursive: true });
+    const f = path.join(STATE, 'maintenance.log');
+    try { if (fs.statSync(f).size > 512 * 1024) fs.renameSync(f, f + '.1'); } catch {}
+    fs.appendFileSync(f, line + '\n');
+  } catch {}
 }
 
 function rotate(file, maxBytes = MAX_LOG_BYTES) {
@@ -90,22 +99,36 @@ function backup() {
   copy(path.join(STATE, 'current-role.json'), path.join(dest, 'current-role.json'));
   log('备份完成 ->', dest);
 
-  // 异地一份：云盘目录会自动同步
+  // 异地一份：OneDrive 会自动同步到云
   const cloudRoot = process.env.CLOUD_BACKUP_DIR || path.join(os.homedir(), 'OneDrive', 'qq-bot-backup');
   try {
     if (fs.existsSync(path.join(os.homedir(), 'OneDrive'))) {
-      const cloudDest = path.join(cloudRoot, day);
-      fs.mkdirSync(path.dirname(cloudDest), { recursive: true });
-      fs.cpSync(dest, cloudDest, { recursive: true, force: true });
-      log('已同步到云盘 ->', cloudDest);
-      makeEncryptedArchive(dest, path.join(cloudRoot, day));
+      // 只把加密包放云上。原来这里会先 cpSync 一份明文目录到 OneDrive，
+      // 里面是 config.json（含 consoleToken）、人设和全部记忆 ——
+      // 等于把加密包的意义抵消掉了。2026-10-28 改掉。
+      fs.mkdirSync(cloudRoot, { recursive: true });
+      const arc = makeEncryptedArchive(dest, path.join(cloudRoot, day));
+      if (arc) log('已同步加密包到云端 ->', arc);
+      else log('加密包没打出来（检查 7z 是否存在），本次没有云端备份');
+
+      // 顺手清掉旧版本留下的明文目录（纯日期命名的那些）。
+      // 它们装了 config.json（含 consoleToken）、人设和全部记忆，留在云上等于没加密。
+      try {
+        for (const name of fs.readdirSync(cloudRoot)) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(name)) continue;
+          const p2 = path.join(cloudRoot, name);
+          if (!fs.statSync(p2).isDirectory()) continue;
+          fs.rmSync(p2, { recursive: true, force: true });
+          log('清掉云上的明文备份目录', name);
+        }
+      } catch (e) { log('清理明文目录失败（可能被 OneDrive 占用）:', e.message); }
       const cdirs = fs.readdirSync(cloudRoot).sort();
       while (cdirs.length > KEEP_BACKUPS) {
         const v = cdirs.shift();
         fs.rmSync(path.join(cloudRoot, v), { recursive: true, force: true });
       }
     }
-  } catch (e) { log('云盘备份失败:', e.message); }
+  } catch (e) { log('OneDrive 备份失败:', e.message); }
 
   // 只留最近 N 份
   const dirs = fs.readdirSync(BACKUPS).filter((n) => /^\d{4}-\d{2}-\d{2}$/.test(n)).sort();

@@ -129,6 +129,50 @@ async function checkMemory() {
   say(fs.existsSync(path.join(ARCHIVE, `${today}.md`)), `今天（${today}）的聊天档案存在`);
 }
 
+// ── 3.5) 档案是不是只记了一方 ──────────────────────────────────────
+// 2026-10-28 发现的坑：collector 的「老游标兜底」把所有带 seq 的消息永久跳过，
+// 而带 seq 的恰好都是哥发的 —— 结果两天的档案里只有她自己的话。
+// 症状不明显：档案文件存在、行数在涨、self-check 的「档案存在」也照样通过。
+// 所以这里专门对一次：今天聊了十几条，却一句都没有哥的，那一定是坏了。
+async function checkArchiveBothSides() {
+  console.log('\n=== 档案完整性 ===');
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+  const f = path.join(ARCHIVE, `${day}.md`);
+  if (!fs.existsSync(f)) { say(false, '今天的档案文件不存在'); return; }
+
+  // 机器人自己的昵称：优先进程问 NapCat，问不到就用档案里出现最多的那个
+  let botNick = '';
+  try {
+    const r = await fetch('http://127.0.0.1:3000/get_login_info', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      signal: AbortSignal.timeout(5000),
+    });
+    const j = await r.json();
+    botNick = String(j?.data?.nickname || '');
+  } catch {}
+
+  const lines = fs.readFileSync(f, 'utf8').split('\n').filter((l) => /^-\s*\d{2}:\d{2}\s+\*\*/.test(l));
+  const nicks = new Map();
+  for (const l of lines) {
+    const m = l.match(/^-\s*\d{2}:\d{2}\s+\*\*(.+?)\*\*/);
+    if (m) nicks.set(m[1], (nicks.get(m[1]) || 0) + 1);
+  }
+  if (!botNick && nicks.size) {
+    botNick = [...nicks.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }
+
+  const ownerLines = lines.filter((l) => {
+    const m = l.match(/^-\s*\d{2}:\d{2}\s+\*\*(.+?)\*\*/);
+    return m && m[1] !== botNick;
+  }).length;
+
+  const hour = Number(new Date().toLocaleString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false }).slice(0, 2));
+  if (lines.length >= 8 && ownerLines === 0 && hour >= 9) {
+    say(false, `今天归档了 ${lines.length} 条，但一句都没有对方说的（只剩 "${botNick}" 一方）— 档案收集器又只记一方了`);
+  } else {
+    say(true, `档案双向正常（对方 ${ownerLines} 条 / 共 ${lines.length} 条）`);
+  }
+}
 // ── 4) 出戏检测 ──────────────────────────────────────────────────
 // 只查「角色卡最后一次改完之后」的聊天。
 // 不然改了角色卡也永远在报旧账：2026-10-27 早上 07:19 那句「我是哥的 AI <BOT_NAME>」
@@ -175,6 +219,7 @@ console.log(`=== self-check ${FIX ? '(--fix)' : ''} ${new Date().toLocaleString(
 checkKey();
 checkRestartLoop();
 await checkMemory();
+await checkArchiveBothSides();
 checkRoleBreak();
 
 console.log('\n' + (problems === 0 ? '全部正常' : `发现 ${problems} 个问题`));

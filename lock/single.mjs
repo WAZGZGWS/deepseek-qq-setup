@@ -33,7 +33,9 @@ export function singleInstance(name, stateDir) {
   // 锁还在心跳期内 → 说明真有实例在跑，让位
   if (isFresh()) {
     say(`[lock] ${name} 已有实例在跑（锁 ${Math.round((Date.now() - fs.statSync(file).mtimeMs) / 1000)}s 前刷新），本进程退出`);
-    process.exit(0);
+    // 退出码 3 = "已经有人在跑，不是崩溃"。supervisor 看到 3 不会再拉，
+    // 否则会形成「每 5 秒起一个注定失败的克隆」的死循环（2026-10-28 实际发生过）。
+    process.exit(3);
   }
 
   // 接管：写自己的 pid，并开始心跳

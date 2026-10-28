@@ -17,17 +17,8 @@ import path from 'node:path';
 const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const ROOT = path.join(HERE, '..');
 const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-// CHAT_KEY 不填就自动从桥接 config.json 里读 ownerQQ —— 下载的人不用手改
-function resolveChatKey(bridgeDir) {
-  if (process.env.CHAT_KEY) return process.env.CHAT_KEY;
-  try {
-    const c = JSON.parse(fs.readFileSync(path.join(bridgeDir, 'config.json'), 'utf8'));
-    if (Number(c.ownerQQ)) return `private:${Number(c.ownerQQ)}`;
-  } catch {}
-  return 'private:YOUR_QQ';
-}
 const STATE = path.join(BRIDGE, 'state');
-const KEY = resolveChatKey(BRIDGE);
+const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
 const DRY = process.argv.includes('--dry') || process.env.DRY_RUN === '1';
 
 const MAX_TRAITS = Number(process.env.MAX_TRAITS || 10);
@@ -90,6 +81,82 @@ function dedupeList(list, max, maxChars) {
   return out.slice(0, max);
 }
 
+// ── 长句压短：这一步交给模型 ──────────────────────────────────────────
+// 实测 2026-10-28 的事实里有这种：
+//   「哥说过：余额不够用一定要第一时间跟他说，他给充；我嘴上应了『真不够第一个找你』」
+// 39 个字，半句是过程。事实应该是「钱不够第一时间找哥要」，一句话说完。
+//
+// 铁律：**条数必须一模一样**。模型只能把每条写短，不许合并、不许增删。
+// 条数对不上就整个放弃，用原文。
+const AI_MAX = Number(process.env.TIDY_AI_MAX || 1);
+
+function readKey() {
+  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY.trim();
+  try {
+    const t = fs.readFileSync(path.join(process.env.USERPROFILE || '', '.dsh', '.credentials.yaml'), 'utf8');
+    const m = t.match(/DEEPSEEK_API_KEY:\s*(sk-[A-Za-z0-9_-]+)/);
+    if (m) return m[1];
+  } catch {}
+  return '';
+}
+
+async function compressFacts(facts) {
+  if (!AI_MAX || !facts.length) return null;
+  const long = facts.filter((f) => f.length > 32);
+  if (!long.length) return null;               // 都不长，没必要花这个钱
+  const key = readKey();
+  if (!key) { log('没有 API key，跳过 AI 压缩'); return null; }
+
+  const prompt = `下面是一份「长期事实」列表。请把每一条改写成更短的一句结论，要求：
+
+1. **输出条数必须和输入完全一样**，一条都不能少、不能合并、不能拆分。
+2. 每条不超过 40 个字。
+3. 只留结论，删掉「他说」「我说」「然后」「我嘴上应了」这类过程描写。
+4. 保留所有具体信息：数字、时间、地点、口味、人名。
+5. 只输出 JSON 数组，不要任何解释：["...","..."]
+
+输入：
+${JSON.stringify(facts, null, 2)}`;
+
+  try {
+    const r = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        max_tokens: 1500,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!r.ok) { log(`AI 压缩失败：HTTP ${r.status}`); return null; }
+    const j = await r.json();
+    const text = j?.choices?.[0]?.message?.content || '';
+    const m = text.match(/\[[\s\S]*\]/);
+    if (!m) { log('AI 压缩失败：返回里没有数组'); return null; }
+    const out = JSON.parse(m[0]);
+    if (!Array.isArray(out) || out.length !== facts.length) {
+      log(`AI 压缩结果条数不对（${facts.length}→${Array.isArray(out) ? out.length : '非数组'}），放弃`);
+      return null;
+    }
+    const cleaned = out.map((x) => String(x || '').trim()).filter(Boolean);
+    if (cleaned.length !== facts.length) { log('AI 压缩结果有空项，放弃'); return null; }
+    // 逐条比对：新的一条不能比原来长，也不能短到几乎没有信息
+    for (let i = 0; i < cleaned.length; i++) {
+      if (cleaned[i].length > facts[i].length || cleaned[i].length < 4) {
+        log(`AI 压缩第 ${i + 1} 条不合格（${facts[i].length}→${cleaned[i].length}），放弃`);
+        return null;
+      }
+    }
+    const saved = facts.reduce((a, f) => a + f.length, 0) - cleaned.reduce((a, f) => a + f.length, 0);
+    log(`AI 压缩：${facts.length} 条，共省 ${saved} 字`);
+    return cleaned;
+  } catch (e) {
+    log('AI 压缩异常：' + e.message);
+    return null;
+  }
+}
 async function main() {
   const mem = (await api(`/api/socialV2/memory?key=${encodeURIComponent(KEY)}`)).body?.raw;
   if (!mem) { log('读不到记忆，退出'); return; }
@@ -145,7 +212,14 @@ async function main() {
     }
     facts.push(t);
   }
-  const factsNew = facts.slice(0, MAX_FACTS);
+  let factsNew = facts.slice(0, MAX_FACTS);
+  // 长句压短（条数不变）。失败就用原文，不影响其它步骤。
+  if (!DRY) {
+    try {
+      const shorter = await compressFacts(factsNew);
+      if (shorter) factsNew = shorter;
+    } catch (e) { log('压缩步骤异常（忽略）: ' + e.message); }
+  }
   const factsChanged = factsNew.length !== factsIn.length || factsNew.some((f, i) => f !== factsIn[i]);
 
   const before = JSON.stringify(mem);
@@ -191,6 +265,50 @@ async function main() {
         body: JSON.stringify({ key: KEY, category: 'fact', content: f }),
       });
     }
+  }
+  // ── 写后对账：数量对不上就用快照恢复 ────────────────────────────
+  // 整理是「先全清空、再逐条写回」。中途只要有一个请求失败（网络抖动、桥接重启），
+  // 那一类记忆就永久少了一截，而且没人会发现 —— 快照虽然写了，但没人去比。
+  const back = (await api(`/api/socialV2/memory?key=${encodeURIComponent(KEY)}`)).body?.raw;
+  if (back) {
+    const gotTopics = Array.isArray(back.activeTopics) ? back.activeTopics.length : 0;
+    const gotThoughts = Array.isArray(back.pendingThoughts) ? back.pendingThoughts.length : 0;
+    const gotFacts = Array.isArray(back.facts) ? back.facts.length : 0;
+    const factOk = clearCats.includes('fact') ? gotFacts === factsNew.length : true;
+    const bad = [];
+    if (gotTopics !== topics.length) bad.push(`话题 ${topics.length}→${gotTopics}`);
+    if (gotThoughts !== thoughts.length) bad.push(`想法 ${thoughts.length}→${gotThoughts}`);
+    if (!factOk) bad.push(`事实 ${factsNew.length}→${gotFacts}`);
+
+    if (bad.length) {
+      log('⚠️ 写回后数量对不上（' + bad.join('，') + '），用快照恢复原始记忆');
+      for (const cat of ['activeTopic', 'pendingThought', 'memberImpression', 'fact']) {
+        await api('/api/socialV2/memory-clear', { method: 'POST', body: JSON.stringify({ key: KEY, category: cat }) });
+      }
+      for (const t2 of mem.activeTopics || []) {
+        await api('/api/socialV2/memory-append', {
+          method: 'POST',
+          body: JSON.stringify({ key: KEY, category: 'activeTopic', content: t2.text, extra: { pendingQuestion: t2.pendingQuestion, participants: t2.participants } }),
+        });
+      }
+      for (const t2 of mem.pendingThoughts || []) {
+        await api('/api/socialV2/memory-append', { method: 'POST', body: JSON.stringify({ key: KEY, category: 'pendingThought', content: t2.text }) });
+      }
+      for (const [target, im] of Object.entries(mem.memberImpressions || {})) {
+        for (const trait of im.traits || []) {
+          await api('/api/socialV2/memory-append', { method: 'POST', body: JSON.stringify({ key: KEY, category: 'memberImpression', content: trait, extra: { target } }) });
+        }
+      }
+      for (const f of mem.facts || []) {
+        const content = typeof f === 'string' ? f : (f && f.text);
+        if (!content) continue;
+        await api('/api/socialV2/memory-append', { method: 'POST', body: JSON.stringify({ key: KEY, category: 'fact', content }) });
+      }
+      log('已从快照恢复（原始 ' + ((mem.facts || []).length) + ' 条事实 / ' + ((mem.activeTopics || []).length) + ' 个话题）');
+      return;
+    }
+    log('写回校验通过：' + summary);
+    return;
   }
   log('已整理：', summary);
 }

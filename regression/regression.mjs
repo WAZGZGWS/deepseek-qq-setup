@@ -120,6 +120,22 @@ check('NapCat 3000', () => p3000 || '未监听');
 check('NapCat 3001', () => p3001 || '未监听');
 check('桥接控制台 3100', () => p3100 || '未监听');
 
+// ---- 新组件在位（2026-10-27/28 加的）----
+check('stack-doctor 存在', () => fs.existsSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs')));
+check('like-card 存在', () => fs.existsSync(path.join(ROOT, 'like-card', 'like-card.mjs')));
+check('eye-drop 存在', () => fs.existsSync(path.join(ROOT, 'eye-drop', 'eye-drop.mjs')));
+check('eye-drop 已注册进 supervisor', () => {
+  const s = fs.readFileSync(path.join(ROOT, 'supervisor', 'supervisor.mjs'), 'utf8');
+  return /name:\s*'eye-drop'/.test(s) || 'supervisor 里没注册，它不会自己起来';
+});
+check('滴眼药水改为按醒来时间排（固定任务应已停用）', () => {
+  const f = path.join(BRIDGE, 'state', 'scheduler.json');
+  if (!fs.existsSync(f)) return '读不到 scheduler.json';
+  const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+  const fixed = (j.tasks || []).filter((t) => /^滴眼药水/.test(t.name) && t.enabled !== false);
+  return fixed.length === 0 || `还有 ${fixed.length} 条固定任务开着（会和 eye-drop 重复提醒）`;
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {
