@@ -52,6 +52,18 @@ const HOUR = 3600 * 1000;
 const RETRY_WINDOW_H = Number(process.env.RETRY_WINDOW_H || 6);
 const RETRY_WINDOW = RETRY_WINDOW_H * HOUR;
 
+/** NapCat WebUI 端口（密码登录走它；从 napcat/config/webui.json 读，读不到按 6099） */
+const WEBUI_PORT = (() => {
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(NAPCAT_DIR, 'config', 'webui.json'), 'utf8'));
+    return Number(c.port) || 6099;
+  } catch {
+    return Number(process.env.NAPCAT_WEBUI_PORT || 6099);
+  }
+})();
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 function stamp() {
   return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
 }
@@ -350,7 +362,29 @@ async function main() {
 
   // 1. NapCat
   const nc = await probeNapcat();
-  await handle(state, 'napcat', nc.ok, () => {
+  await handle(state, 'napcat', nc.ok, async () => {
+    // 设过密码的话，先走「密码登录」：不弹二维码、不用碰手机
+    // （只在 NapCat 进程活着、WebUI 能连上时才有意义）
+    const pwdFile = path.join(ROOT, 'qq-password.dat');
+    const qqLogin = path.join(ROOT, 'tools', 'qq-login.mjs');
+    if (fs.existsSync(pwdFile) && fs.existsSync(qqLogin) && (await probePort(WEBUI_PORT))) {
+      try {
+        const out = execFileSync(process.execPath, [qqLogin, 'password'], {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 60000,
+          env: { ...process.env, DSH_NO_HOT_RELOAD: '1' },
+        });
+        const last = String(out || '').trim().split('\n').filter(Boolean).pop() || '';
+        if (last) log('密码登录：' + last.slice(0, 160));
+      } catch (e) {
+        const msg = String((e.stdout || '') + (e.stderr || '') || e.message).trim().split('\n').pop();
+        log('密码登录失败：' + String(msg).slice(0, 160));
+      }
+      await sleep(12000);
+      if ((await probeNapcat()).ok) return true;
+    }
+
     if (!fs.existsSync(BOOT_BAT)) {
       log('找不到 ' + BOOT_BAT);
       return false;
@@ -359,7 +393,9 @@ async function main() {
   }, {
     label: 'QQ（NapCat）',
     why: nc.why,
-    manualHint: '需要手动扫码：双击安装目录里的「测试快速登录.bat」',
+    manualHint: fs.existsSync(path.join(ROOT, 'qq-password.dat'))
+      ? '密码登录也失败了：可能需要人工确认（验证码/新设备），打开 NapCat WebUI 或双击「测试快速登录.bat」'
+      : '需要手动扫码：双击安装目录里的「测试快速登录.bat」；想免扫码就双击 tools\\set-qq-password.cmd 设一次密码',
   });
 
   // 2. 桥接（3000 没起来时桥接必然报错，不必重复判断）

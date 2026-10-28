@@ -42,3 +42,6 @@ desktop.ini
 
 # budget-guard 的运行状态（省电模式标记）
 budget-guard/quiet
+
+# 机器人 QQ 密码（DPAPI 加密，绝不提交）
+qq-password.dat

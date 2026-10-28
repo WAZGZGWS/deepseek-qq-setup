@@ -195,6 +195,16 @@ check('会话和附件会自动清（省空间）', () => {
   const ok = /SESSION_KEEP_DAYS/.test(s) && /ATTACH_KEEP_DAYS/.test(s) && /pruneOld\(/.test(s);
   return ok || 'session-janitor 里没有保留天数/清理逻辑';
 });
+check('免扫码登录工具在位', () => {
+  const login = path.join(ROOT, 'tools', 'qq-login.mjs');
+  const setter = path.join(ROOT, 'tools', 'set-qq-password.ps1');
+  if (!fs.existsSync(login)) return '缺 tools/qq-login.mjs';
+  if (!fs.existsSync(setter)) return '缺 tools/set-qq-password.ps1';
+  const t = fs.readFileSync(login, 'utf8');
+  if (!t.includes('ProtectedData')) return '密码没有用 DPAPI 加密';
+  if (/password\s*:\s*['"][^'"]+['"]/.test(t)) return '脚本里疑似写死了密码';
+  return true;
+});
 
 // ---- 输出 ----
 let failed = 0;
