@@ -40,8 +40,25 @@ function portOpen(port) {
 }
 
 // ---- 角色卡 ----
-const roleFile = path.join(BRIDGE, 'roles', '<BOT_NAME>.md');
-check('角色卡存在', () => fs.existsSync(roleFile) || '缺失 roles/<BOT_NAME>.md');
+// 不写死人设文件名：开源用户爱叫什么叫什么，我们自己的名字也已经脱敏。
+function findRoleFile() {
+  try {
+    const cur = JSON.parse(fs.readFileSync(path.join(BRIDGE, 'state', 'current-role.json'), 'utf8'));
+    const name = String(cur?.name || cur?.role || '').trim();
+    if (name) {
+      const p1 = path.join(BRIDGE, 'roles', name.endsWith('.md') ? name : name + '.md');
+      if (fs.existsSync(p1)) return p1;
+    }
+  } catch {}
+  try {
+    const dir = path.join(BRIDGE, 'roles');
+    const f = fs.readdirSync(dir).filter((x) => x.endsWith('.md') && x.toLowerCase() !== 'readme.md')[0];
+    if (f) return path.join(dir, f);
+  } catch {}
+  return path.join(BRIDGE, 'roles', 'role.md');
+}
+const roleFile = findRoleFile();
+check('角色卡存在', () => fs.existsSync(roleFile) || ('roles/ 下没有角色卡（找的是 ' + path.basename(roleFile) + '）'));
 check('角色卡有「你是谁」', () => read(roleFile).includes('你是谁'));
 check('角色卡有「口癖」', () => read(roleFile).includes('口癖'));
 check('角色卡有「翻旧账」', () => read(roleFile).includes('翻旧账'));
@@ -60,7 +77,7 @@ check('预设含自定时间', () => read(preset).includes('什么时候醒'));
 
 // ---- 配置 ----
 const cfg = JSON.parse(read(path.join(BRIDGE, 'config.json')));
-check('白名单只有哥', () => JSON.stringify(cfg.allow.private) === '["YOUR_QQ"]' || JSON.stringify(cfg.allow.private));
+check('白名单只有一个联系人', () => (cfg.allow.private || []).length === 1 || ('当前 ' + JSON.stringify(cfg.allow.private)));
 check('allowAllWhenEmpty=false', () => cfg.allowAllWhenEmpty === false);
 check('群聊未开放', () => (cfg.allow.groups || []).length === 0);
 check('系统提示静默', () => cfg.systemNotices === false);
