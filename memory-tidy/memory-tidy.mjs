@@ -1,15 +1,24 @@
 #!/usr/bin/env node
 /**
- * memory-tidy —— 记忆自动优化（不花 token，纯本地规则）
+ * memory-tidy —— 记忆清理与优化（不花 token，纯本地规则）
  *
- * 从桥接的记忆里读出来，做四件事再写回去：
- *   1) 印象里的重复/近似条目合并（保留信息量最大的几条）
- *   2) 每条印象截断到 MAX_TRAIT 字，最多保留 MAX_TRAITS 条
- *   3) 进行中的话题超过 TOPIC_TTL_DAYS 天没再提，删掉
- *   4) 话题最多 MAX_TOPICS 条，优先保留最近的
+ * 每次跑做四件事，然后**再检查一遍，直到查不到没用的为止**：
+ *   1) 清垃圾：占位符、出戏台词、指令残留、纯语气词、只有标点数字的条目
+ *   2) 合并重复：同一条被写了几遍、或一条是另一条的近似改写（保留信息量大的）
+ *   3) 限长限量：按句读截断（不切碎句子），话题按 TTL 清旧的，每类有上限
+ *   4) 长事实压短：交给模型，条数必须一模一样，对不上就放弃
  *
- * 写回前会把旧记忆快照到 chat-memory/tidy-<日期>.json
- * 用法：node memory-tidy.mjs [--dry]
+ * 为什么要有「循环检查」：
+ *   写回是「先清空、再逐条写」的，中途桥接重启/网络抖动会少写一条；
+ *   而且整理期间她可能还在聊天，新记忆会在你清理完的那一刻又进来。
+ *   所以每轮写完都重新读回来扫一遍，脏就再清一轮，最多 TIDY_ROUNDS 轮。
+ *
+ * 删掉的东西一律留证据：state/memory-removed.log 里逐条记着原文和删除原因。
+ * 写回前还会把整份旧记忆快照到 chat-memory/tidy-<日期>.json，出问题能捞回来。
+ *
+ * 用法：node memory-tidy.mjs            整理并循环检查
+ *       node memory-tidy.mjs --dry      只打印要做什么，不写
+ *       node memory-tidy.mjs --check    只体检：列出没用的条目，不改
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,6 +26,7 @@ import { ROOT, STATE, stamp, chatKey, consoleApi as api } from '../lib/base.mjs'
 
 const KEY = chatKey();
 const DRY = process.argv.includes('--dry') || process.env.DRY_RUN === '1';
+const CHECK_ONLY = process.argv.includes('--check');
 
 const MAX_TRAITS = Number(process.env.MAX_TRAITS || 10);
 const MAX_TRAIT_CHARS = Number(process.env.MAX_TRAIT_CHARS || 120);
@@ -25,6 +35,12 @@ const TOPIC_TTL_DAYS = Number(process.env.TOPIC_TTL_DAYS || 14);
 const MAX_FACTS = Number(process.env.MAX_FACTS || 40);
 const MAX_FACT_CHARS = Number(process.env.MAX_FACT_CHARS || 60);
 const MAX_TOPIC_CHARS = Number(process.env.MAX_TOPIC_CHARS || 80);
+const MAX_THOUGHTS = Number(process.env.MAX_THOUGHTS || 5);
+/** 最多清几轮。1 轮通常就干净了，多留几轮是给「边清边聊」的情况兜底 */
+const ROUNDS = Math.max(1, Number(process.env.TIDY_ROUNDS || 3));
+const REMOVED_LOG = path.join(STATE, 'memory-removed.log');
+/** state 目录带「低完整性」标记，高权限进程反而写不进去；写不进去就落到 chat-memory/ */
+const REMOVED_LOG_FALLBACK = path.join(ROOT, 'chat-memory', 'memory-removed.log');
 
 function log(...a) {
   const line = `[${stamp()}] ${a.join(' ')}`;
@@ -32,43 +48,138 @@ function log(...a) {
   try { fs.appendFileSync(path.join(STATE, 'memory-tidy.log'), line + '\n'); } catch {}
 }
 
-/** 归一化：去空白、去重复标点，用于判重 */
-function norm(s) {
-  return String(s || '').replace(/\s+/g, '').replace(/[，。；、,.;!?！？]/g, '');
+/** 删掉的东西留个证据，别让人觉得记忆是她自己丢的 */
+function audit(list) {
+  if (!list.length) return;
+  const text = list.map((x) => `[${stamp()}] ${x.cat}${x.target ? '/' + x.target : ''}｜${x.reason}｜${x.text}`).join('\n') + '\n';
+  for (const f of [REMOVED_LOG, REMOVED_LOG_FALLBACK]) {
+    try {
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.appendFileSync(f, text);
+      return;
+    } catch {}
+  }
 }
 
-/** 近似判定：一条是另一条的前缀，或重合度很高 */
+// ── 判重 / 判垃圾 ────────────────────────────────────────────────────
+
+/** 归一化：去空白、去标点、去大小写差异，用于判重 */
+function norm(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[，。；、,.;!?！？:：~～…—\-（）()"'"'《》]/g, '');
+}
+
+/** 中文按二字切片，比单个字更能看出「是不是同一句话」 */
+function bigrams(s) {
+  const out = new Set();
+  for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
+  return out;
+}
+
+/** 近似判定：完全相同 / 一条是另一条的前缀 / 字重合度高 / 二字切片重合度高 */
 function similar(a, b) {
-  const x = norm(a), y = norm(b);
+  const x = norm(a);
+  const y = norm(b);
   if (!x || !y) return false;
   if (x === y) return true;
   if (x.length >= 8 && y.length >= 8 && (x.startsWith(y) || y.startsWith(x))) return true;
-  // 交集/并集
-  const sx = new Set(x), sy = new Set(y);
+
+  const sx = new Set(x);
+  const sy = new Set(y);
   let inter = 0;
   for (const ch of sx) if (sy.has(ch)) inter += 1;
   const union = sx.size + sy.size - inter;
-  return union > 0 && inter / union >= 0.85;
+  if (union > 0 && inter / union >= 0.85) return true;
+
+  // 二字切片：抓「换了个说法但说的是同一件事」
+  const bx = bigrams(x);
+  const by = bigrams(y);
+  if (bx.size < 3 || by.size < 3) return false;
+  let bi = 0;
+  for (const g of bx) if (by.has(g)) bi += 1;
+  const bu = bx.size + by.size - bi;
+  return bu > 0 && bi / bu >= 0.72;
 }
 
-function dedupeList(list, max, maxChars) {
-  const out = [];
+/** 截断：优先切在句读上，别把一句话切成「…；妹」这种残句 */
+function cutText(s, max) {
+  const t = String(s || '').trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max);
+  const at = Math.max(
+    head.lastIndexOf('。'), head.lastIndexOf('；'), head.lastIndexOf('！'),
+    head.lastIndexOf('？'), head.lastIndexOf('，'), head.lastIndexOf(' '),
+  );
+  // 切点太靠前就别切了，硬截断也比只剩半句强
+  if (at >= Math.floor(max * 0.6)) return head.slice(0, at).trim();
+  return head.trim();
+}
+
+/** 纯语气词/寒暄：去掉标点后只剩这些字，且很短 */
+const FILLER = /^[嗯啊哦噢好行对是哈呵嘿啦呀吧的吗呢么了收到在]+$/;
+/** 只有标点、符号、数字、空白 */
+const ONLY_SYMBOLS = /^[\p{P}\p{S}\d\s]+$/u;
+
+/** 明确属于「垃圾/污染」的模式，返回原因；没问题返回空串 */
+function junkReason(text) {
+  const t = String(text || '').trim();
+  if (!t) return '空条目';
+  if (t.length < 4) return '太短，没有信息量';
+  if (/^(.)\1{3,}$/.test(t)) return '同一个字重复';
+
+  const rules = [
+    ['占位符/脏数据', /<BOT_NAME>|YOUR_QQ|YOUR_BOT_QQ|YOUR_PC|undefined|\bnull\b|NaN|\[object Object\]|TODO|占位/i],
+    ['出戏/meta 台词', /我是\s*AI|作为(一个)?\s*(AI|助手|语言模型)|语言模型|系统提示|根据聊天(记录)?|聊天记录显示|以上是|以下是|无法确定|抱歉[，,]/],
+    ['指令/提示词残留', /请把|请提炼|输出\s*JSON|system\s*prompt|提示词/],
+    ['代码或链接', /https?:\/\/|```|function\s*\(|=>|<\/?[a-z][a-z0-9]*>/],
+    ['只有符号或数字', ONLY_SYMBOLS],
+    ['只有语气词', FILLER],
+  ];
+  for (const [why, re] of rules) if (re.test(t)) return why;
+  return '';
+}
+
+/** 去空、去垃圾、按句读截断，返回保留项和删掉的项 */
+function cleanList(cat, list, maxChars, target = '') {
+  const removed = [];
+  const kept = [];
   for (const raw of list) {
-    const t = String(raw || '').trim().slice(0, maxChars);
-    if (!t) continue;
-    if (out.some((o) => similar(o, t))) continue;
+    const t = cutText(raw, maxChars);
+    const why = junkReason(t);
+    if (why) {
+      removed.push({ cat, target, text: String(raw || '').trim(), reason: why });
+      continue;
+    }
+    kept.push(t);
+  }
+  return { kept, removed };
+}
+
+/** 去近似重复：留信息量大的（长的），删短的 */
+function dedupeList(cat, list, max, maxChars, target = '') {
+  const { kept, removed } = cleanList(cat, list, maxChars, target);
+  const out = [];
+  for (const t of kept) {
+    const dup = out.findIndex((o) => similar(o, t));
+    if (dup >= 0) {
+      if (t.length > out[dup].length) {
+        removed.push({ cat, target, text: out[dup], reason: '与另一条重复（留了更全的那条）' });
+        out[dup] = t;
+      } else {
+        removed.push({ cat, target, text: t, reason: '与另一条重复' });
+      }
+      continue;
+    }
     out.push(t);
   }
-  // 信息量优先：长的在前
   out.sort((a, b) => b.length - a.length);
-  return out.slice(0, max);
+  for (const t of out.slice(max)) removed.push({ cat, target, text: t, reason: `超过上限 ${max} 条` });
+  return { kept: out.slice(0, max), removed };
 }
 
 // ── 长句压短：这一步交给模型 ──────────────────────────────────────────
-// 实测 2026-10-28 的事实里有这种：
-//   「哥说过：余额不够用一定要第一时间跟他说，他给充；我嘴上应了『真不够第一个找你』」
-// 39 个字，半句是过程。事实应该是「钱不够第一时间找哥要」，一句话说完。
-//
 // 铁律：**条数必须一模一样**。模型只能把每条写短，不许合并、不许增删。
 // 条数对不上就整个放弃，用原文。
 const AI_MAX = Number(process.env.TIDY_AI_MAX || 1);
@@ -86,7 +197,7 @@ function readKey() {
 async function compressFacts(facts) {
   if (!AI_MAX || !facts.length) return null;
   const long = facts.filter((f) => f.length > 32);
-  if (!long.length) return null;               // 都不长，没必要花这个钱
+  if (!long.length) return null;
   const key = readKey();
   if (!key) { log('没有 API key，跳过 AI 压缩'); return null; }
 
@@ -125,7 +236,6 @@ ${JSON.stringify(facts, null, 2)}`;
     }
     const cleaned = out.map((x) => String(x || '').trim()).filter(Boolean);
     if (cleaned.length !== facts.length) { log('AI 压缩结果有空项，放弃'); return null; }
-    // 逐条比对：新的一条不能比原来长，也不能短到几乎没有信息
     for (let i = 0; i < cleaned.length; i++) {
       if (cleaned[i].length > facts[i].length || cleaned[i].length < 4) {
         log(`AI 压缩第 ${i + 1} 条不合格（${facts[i].length}→${cleaned[i].length}），放弃`);
@@ -140,24 +250,45 @@ ${JSON.stringify(facts, null, 2)}`;
     return null;
   }
 }
-async function main() {
-  const mem = (await api(`/api/socialV2/memory?key=${encodeURIComponent(KEY)}`)).body?.raw;
-  if (!mem) { log('读不到记忆，退出'); return; }
 
-  // 快照
+// ── 读 / 写 ──────────────────────────────────────────────────────────
+
+async function readMem() {
+  const r = await api(`/api/socialV2/memory?key=${encodeURIComponent(KEY)}`);
+  return r.body?.raw || null;
+}
+
+function snapshot(mem, round) {
   try {
     const dir = path.join(ROOT, 'chat-memory');
     fs.mkdirSync(dir, { recursive: true });
     const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-    fs.writeFileSync(path.join(dir, `tidy-${day}.json`), JSON.stringify({ at: new Date().toISOString(), key: KEY, raw: mem }, null, 2));
+    const file = path.join(dir, `tidy-${day}.json`);
+    if (round > 1 && fs.existsSync(file)) return; // 当天第一轮已经存过原始状态
+    fs.writeFileSync(file, JSON.stringify({ at: new Date().toISOString(), key: KEY, raw: mem }, null, 2));
   } catch (e) { log('快照失败:', e.message); }
+}
 
-  const topics = (mem.activeTopics || []).filter((t) => {
-    const ts = Number(t.lastMentionAt || 0);
-    if (!ts) return true;
-    return Date.now() - ts < TOPIC_TTL_DAYS * 86400000;
-  })
-    // 还没聊完的事（pendingQuestion）优先留着，别因为"旧"就砍掉
+/** 在内存里整理一遍，返回 {out, removed, summary} */
+async function tidy(mem) {
+  const removed = [];
+
+  // 话题：先清垃圾 + 去重，再按 TTL / 上限
+  const topicTexts = (mem.activeTopics || []).map((t) => String(t.text || ''));
+  const topicClean = dedupeList('activeTopic', topicTexts, MAX_TOPICS * 2, MAX_TOPIC_CHARS);
+  removed.push(...topicClean.removed);
+
+  const keepTexts = new Set(topicClean.kept.map((t) => norm(t)));
+  const topics = (mem.activeTopics || [])
+    .filter((t) => keepTexts.has(norm(t.text)))
+    .filter((t) => {
+      const ts = Number(t.lastMentionAt || 0);
+      if (!ts) return true;
+      if (Date.now() - ts < TOPIC_TTL_DAYS * 86400000) return true;
+      removed.push({ cat: 'activeTopic', text: String(t.text || ''), reason: `超过 ${TOPIC_TTL_DAYS} 天没再提` });
+      return false;
+    })
+    // 还没聊完的事（pendingQuestion）优先留着
     .sort((a, b) => {
       const pa = a.pendingQuestion ? 1 : 0;
       const pb = b.pendingQuestion ? 1 : 0;
@@ -165,75 +296,74 @@ async function main() {
       return Number(b.lastMentionAt || 0) - Number(a.lastMentionAt || 0);
     })
     .slice(0, MAX_TOPICS)
-    .map((t) => ({ ...t, text: String(t.text || '').trim().slice(0, MAX_TOPIC_CHARS) }));
+    .map((t) => ({ ...t, text: cutText(t.text, MAX_TOPIC_CHARS) }));
 
+  // 印象：清垃圾 + 去重 + 限长
   const impressions = {};
   for (const [target, im] of Object.entries(mem.memberImpressions || {})) {
-    const traits = dedupeList(im.traits || [], MAX_TRAITS, MAX_TRAIT_CHARS);
-    impressions[target] = { traits, interactionCount: im.interactionCount || 0, lastSeenAt: im.lastSeenAt || 0 };
+    if (!target || /^(undefined|null|\?|unknown)$/i.test(String(target).trim())) {
+      removed.push({ cat: 'memberImpression', target, text: (im.traits || []).join('；'), reason: '印象对象不明' });
+      continue;
+    }
+    const { kept, removed: r } = dedupeList('memberImpression', im.traits || [], MAX_TRAITS, MAX_TRAIT_CHARS, target);
+    removed.push(...r);
+    if (!kept.length) {
+      // 一条不剩也要记账：不然就是「悄悄消失」
+      removed.push({ cat: 'memberImpression', target, text: (im.traits || []).join('；'), reason: '全部被判为垃圾/重复' });
+      continue;
+    }
+    impressions[target] = { traits: kept, interactionCount: im.interactionCount || 0, lastSeenAt: im.lastSeenAt || 0 };
   }
 
-  const thoughts = dedupeList((mem.pendingThoughts || []).map((t) => t.text), 5, 120);
+  // 想法：清垃圾 + 去重 + 限量
+  const thoughtList = (mem.pendingThoughts || []).map((t) => (typeof t === 'string' ? t : t.text));
+  const thoughtsClean = dedupeList('pendingThought', thoughtList, MAX_THOUGHTS, 120);
+  removed.push(...thoughtsClean.removed);
+  const thoughts = thoughtsClean.kept;
 
-  // ── 长期事实：合并近似的、压缩冗长的，但**一条都不许丢** ──────────────
-  // facts 是只增不删的那一层，之前靠 "超过 30 条丢最旧的" 兜底，
-  // 等于聊久了就开始忘早期的事。这里改成先合并重复，实在超过 40 条再谈上限。
+  // 长期事实：清垃圾 + 合并近似 + 压短（垃圾清掉不再补回）
   const factsIn = (mem.facts || [])
     .map((f) => (typeof f === 'string' ? f : f && f.text))
     .map((s) => String(s || '').trim())
     .filter(Boolean);
-  const facts = [];
-  let mergedFacts = 0;
-  for (const raw of factsIn) {
-    const t = raw.slice(0, MAX_FACT_CHARS);
-    const dup = facts.findIndex((f) => similar(f, t));
-    if (dup >= 0) {
-      // 留信息更全的那条，不是留新的那条
-      if (t.length > facts[dup].length && !facts[dup].includes(t)) facts[dup] = t;
-      mergedFacts += 1;
-      continue;
-    }
-    facts.push(t);
-  }
-  let factsNew = facts.slice(0, MAX_FACTS);
-  // 长句压短（条数不变）。失败就用原文，不影响其它步骤。
-  if (!DRY) {
+  const factsClean = dedupeList('fact', factsIn, MAX_FACTS, MAX_FACT_CHARS);
+  removed.push(...factsClean.removed);
+  let factsNew = factsClean.kept;
+  if (!DRY && !CHECK_ONLY) {
     try {
       const shorter = await compressFacts(factsNew);
       if (shorter) factsNew = shorter;
     } catch (e) { log('压缩步骤异常（忽略）: ' + e.message); }
   }
-  const factsChanged = factsNew.length !== factsIn.length || factsNew.some((f, i) => f !== factsIn[i]);
+  // 压缩后的结果再过一遍垃圾检测（模型偶尔会写出「(无)」「暂无」这种）
+  const afterAI = cleanList('fact', factsNew, MAX_FACT_CHARS);
+  removed.push(...afterAI.removed);
+  factsNew = afterAI.kept;
 
-  const before = JSON.stringify(mem);
-  const after = JSON.stringify({ topics, impressions, thoughts, facts: factsNew });
-  if (before === after) { log('记忆已经是最优状态，无需改动'); return; }
-
+  const out = { topics, impressions, thoughts, facts: factsNew };
   const summary =
     `话题 ${(mem.activeTopics || []).length}→${topics.length}｜` +
     `印象 ${Object.keys(mem.memberImpressions || {}).length}→${Object.keys(impressions).length} 人｜` +
     `想法 ${(mem.pendingThoughts || []).length}→${thoughts.length}｜` +
-    `长期事实 ${factsIn.length}→${factsNew.length}` +
-    (mergedFacts ? `（合并 ${mergedFacts} 条重复）` : '');
-  if (DRY) { log('[dry-run]', summary); return; }
+    `长期事实 ${factsIn.length}→${factsNew.length}`;
+  return { out, removed, summary };
+}
 
-  // 分类别清空。fact 默认不动 —— 只有真的合并/压缩过头了才重建一遍，
-  // 重建前已经快照到 chat-memory/tidy-<日期>.json，出问题能捞回来。
-  const clearCats = ['activeTopic', 'pendingThought', 'memberImpression'];
-  if (factsChanged && factsNew.length > 0) clearCats.push('fact');
+async function writeMem(out) {
+  const clearCats = ['activeTopic', 'pendingThought', 'memberImpression', 'fact'];
   for (const cat of clearCats) {
     await api('/api/socialV2/memory-clear', { method: 'POST', body: JSON.stringify({ key: KEY, category: cat }) });
   }
-  for (const t of topics) {
+  for (const t of out.topics) {
     await api('/api/socialV2/memory-append', {
       method: 'POST',
       body: JSON.stringify({ key: KEY, category: 'activeTopic', content: t.text, extra: { pendingQuestion: t.pendingQuestion, participants: t.participants } }),
     });
   }
-  for (const t of thoughts) {
+  for (const t of out.thoughts) {
     await api('/api/socialV2/memory-append', { method: 'POST', body: JSON.stringify({ key: KEY, category: 'pendingThought', content: t }) });
   }
-  for (const [target, im] of Object.entries(impressions)) {
+  for (const [target, im] of Object.entries(out.impressions)) {
     for (const trait of im.traits) {
       await api('/api/socialV2/memory-append', {
         method: 'POST',
@@ -241,59 +371,324 @@ async function main() {
       });
     }
   }
-  if (clearCats.includes('fact')) {
-    for (const f of factsNew) {
-      await api('/api/socialV2/memory-append', {
-        method: 'POST',
-        body: JSON.stringify({ key: KEY, category: 'fact', content: f }),
-      });
-    }
+  for (const f of out.facts) {
+    await api('/api/socialV2/memory-append', { method: 'POST', body: JSON.stringify({ key: KEY, category: 'fact', content: f }) });
   }
-  // ── 写后对账：数量对不上就用快照恢复 ────────────────────────────
-  // 整理是「先全清空、再逐条写回」。中途只要有一个请求失败（网络抖动、桥接重启），
-  // 那一类记忆就永久少了一截，而且没人会发现 —— 快照虽然写了，但没人去比。
-  const back = (await api(`/api/socialV2/memory?key=${encodeURIComponent(KEY)}`)).body?.raw;
-  if (back) {
-    const gotTopics = Array.isArray(back.activeTopics) ? back.activeTopics.length : 0;
-    const gotThoughts = Array.isArray(back.pendingThoughts) ? back.pendingThoughts.length : 0;
-    const gotFacts = Array.isArray(back.facts) ? back.facts.length : 0;
-    const factOk = clearCats.includes('fact') ? gotFacts === factsNew.length : true;
-    const bad = [];
-    if (gotTopics !== topics.length) bad.push(`话题 ${topics.length}→${gotTopics}`);
-    if (gotThoughts !== thoughts.length) bad.push(`想法 ${thoughts.length}→${gotThoughts}`);
-    if (!factOk) bad.push(`事实 ${factsNew.length}→${gotFacts}`);
+}
 
-    if (bad.length) {
-      log('⚠️ 写回后数量对不上（' + bad.join('，') + '），用快照恢复原始记忆');
-      for (const cat of ['activeTopic', 'pendingThought', 'memberImpression', 'fact']) {
-        await api('/api/socialV2/memory-clear', { method: 'POST', body: JSON.stringify({ key: KEY, category: cat }) });
-      }
-      for (const t2 of mem.activeTopics || []) {
-        await api('/api/socialV2/memory-append', {
-          method: 'POST',
-          body: JSON.stringify({ key: KEY, category: 'activeTopic', content: t2.text, extra: { pendingQuestion: t2.pendingQuestion, participants: t2.participants } }),
-        });
-      }
-      for (const t2 of mem.pendingThoughts || []) {
-        await api('/api/socialV2/memory-append', { method: 'POST', body: JSON.stringify({ key: KEY, category: 'pendingThought', content: t2.text }) });
-      }
-      for (const [target, im] of Object.entries(mem.memberImpressions || {})) {
-        for (const trait of im.traits || []) {
-          await api('/api/socialV2/memory-append', { method: 'POST', body: JSON.stringify({ key: KEY, category: 'memberImpression', content: trait, extra: { target } }) });
+/** 写回后核对：数量对不上就说明中途丢了 */
+function verify(expected, back) {
+  const got = {
+    topics: Array.isArray(back.activeTopics) ? back.activeTopics.length : 0,
+    thoughts: Array.isArray(back.pendingThoughts) ? back.pendingThoughts.length : 0,
+    facts: Array.isArray(back.facts) ? back.facts.length : 0,
+    impr: Object.keys(back.memberImpressions || {}).length,
+  };
+  const bad = [];
+  if (got.topics !== expected.topics.length) bad.push(`话题 ${expected.topics.length}→${got.topics}`);
+  if (got.thoughts !== expected.thoughts.length) bad.push(`想法 ${expected.thoughts.length}→${got.thoughts}`);
+  if (got.facts !== expected.facts.length) bad.push(`事实 ${expected.facts.length}→${got.facts}`);
+  if (got.impr !== Object.keys(expected.impressions).length) bad.push(`印象 ${Object.keys(expected.impressions).length}→${got.impr}`);
+  return bad;
+}
+
+/**
+ * 不许「悄悄变少」。
+ *
+ * 2026-10-28 真出过事：整理完，「哥」的那两条印象没了，日志里却一条删除记录都没有——
+ * 因为它是在中间环节丢的（不是被判为垃圾），而当时的校验只比「几个人」，没比「几条」。
+ * 所以这里做一道硬账：**每一类少了多少条，就必须有同样多条的删除记录**。
+ * 对不上就不写，直接退回快照，宁可不整理。
+ */
+function lossCheck(mem, out, removed) {
+  const traitsOf = (m) => Object.values(m.memberImpressions || {}).reduce((a, v) => a + (Array.isArray(v?.traits) ? v.traits.length : 0), 0);
+  const before = {
+    fact: (mem.facts || []).length,
+    activeTopic: (mem.activeTopics || []).length,
+    pendingThought: (mem.pendingThoughts || []).length,
+    memberImpression: traitsOf(mem),
+  };
+  const after = {
+    fact: out.facts.length,
+    activeTopic: out.topics.length,
+    pendingThought: out.thoughts.length,
+    memberImpression: Object.values(out.impressions || {}).reduce((a, v) => a + (v.traits || []).length, 0),
+  };
+  const logged = { fact: 0, activeTopic: 0, pendingThought: 0, memberImpression: 0 };
+  for (const r of removed) if (logged[r.cat] !== undefined) logged[r.cat] += 1;
+
+  const bad = [];
+  for (const cat of Object.keys(before)) {
+    const gone = before[cat] - after[cat];
+    if (gone <= 0) continue;
+    // 印象可能整组消失（人没了）：那种也算一笔，但至少要有记录
+    if (gone > logged[cat]) bad.push(`${cat} 少了 ${gone} 条，但只有 ${logged[cat]} 条删除记录`);
+  }
+  return bad;
+}
+
+/** 两条之间的二字重合度，0~1。用来卡「模型说重复但其实说的不是一件事」 */
+function overlap(a, b) {
+  const x = bigrams(norm(a));
+  const y = bigrams(norm(b));
+  if (x.size < 3 || y.size < 3) return 0;
+  let inter = 0;
+  for (const g of x) if (y.has(g)) inter += 1;
+  return inter / (x.size + y.size - inter);
+}
+
+/**
+ * 模型复审：规则抓不到「换个说法但说的是同一件事」，交给模型找重复。
+ *
+ * 约束（比模型本身更重要）：
+ *   · 只允许两种理由：重复（必须指出跟哪条重复）、出戏/空话
+ *   · 长期事实只许删「重复」——事实是只增不删那层，不能凭"感觉不重要"砍
+ *   · 每类最多删 30%，facts 最少留 3 条
+ *   · 它说删什么就记进 memory-removed.log，谁删的、为什么，一条不落
+ */
+async function aiJudge(out) {
+  if (process.env.TIDY_AI_JUDGE === '0') return [];
+  const items = [];
+  const push = (id, cat, text, target) => items.push({ id, cat, text, target });
+  out.facts.forEach((f, i) => push(`F${i + 1}`, 'fact', f));
+  out.topics.forEach((t, i) => push(`T${i + 1}`, 'activeTopic', t.text));
+  out.thoughts.forEach((t, i) => push(`H${i + 1}`, 'pendingThought', t));
+  for (const [target, im] of Object.entries(out.impressions)) {
+    im.traits.forEach((tr, i) => push(`I${target}#${i + 1}`, 'memberImpression', tr, target));
+  }
+  if (items.length < 6) return [];          // 太少，没必要花钱
+
+  const key = readKey();
+  if (!key) { log('没有 API key，跳过 AI 复审'); return []; }
+
+  const prompt = `下面是一个聊天机器人的「记忆」。请找出**重复**和**明显出戏/空话**的条目。
+
+规则：
+1. 只挑你有把握的；拿不准一律不删。宁可漏，不可错。
+2. 理由只能是两种：「重复」（必须同时给出 dupOf，指向同一类里更完整的那条的 id）或「出戏」（明显是 AI 自我说明、系统话术、无信息客套）。
+3. 长期事实（F 开头）**只允许因为「重复」删除**，不许因为"不重要"删。
+4. 出戏/空话一类最多挑 2 条。
+5. 只输出 JSON，不要解释：{"delete":[{"id":"H2","dupOf":"H1","why":"重复"},{"id":"T5","why":"出戏"}]}
+6. 没有可删的就输出 {"delete":[]}
+
+条目：
+${items.map((x) => `${x.id}｜${x.text}`).join('\n')}`;
+
+  try {
+    const r = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        max_tokens: 800,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!r.ok) { log(`AI 复审失败：HTTP ${r.status}`); return []; }
+    const j = await r.json();
+    const text = j?.choices?.[0]?.message?.content || '';
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) return [];
+    const parsed = JSON.parse(m[0]);
+    const list = Array.isArray(parsed.delete) ? parsed.delete : [];
+
+    const byId = new Map(items.map((x) => [x.id, x]));
+    const perCat = {};
+    const picked = [];
+    for (const d of list) {
+      const it = byId.get(String(d.id || ''));
+      if (!it) continue;
+      const why = String(d.why || '');
+      if (!['重复', '出戏'].includes(why)) continue;
+      if (it.cat === 'fact' && why !== '重复') continue;
+      if (why === '重复') {
+        const dup = byId.get(String(d.dupOf || ''));
+        if (!dup || dup.cat !== it.cat || dup.id === it.id) continue;
+        // 硬约束：说的得真是同一件事。模型 2026-10-28 把「问眼药水」判成「好笑的」
+        // 的重复，差点删掉一条真记忆 —— 从那以后必须自己再验一遍字面重合度。
+        if (overlap(it.text, dup.text) < 0.2) {
+          log(`AI 说 ${it.id} 与 ${dup.id} 重复，但字面重合度只有 ${overlap(it.text, dup.text).toFixed(2)}，不删`);
+          continue;
         }
       }
-      for (const f of mem.facts || []) {
-        const content = typeof f === 'string' ? f : (f && f.text);
-        if (!content) continue;
-        await api('/api/socialV2/memory-append', { method: 'POST', body: JSON.stringify({ key: KEY, category: 'fact', content }) });
-      }
-      log('已从快照恢复（原始 ' + ((mem.facts || []).length) + ' 条事实 / ' + ((mem.activeTopics || []).length) + ' 个话题）');
-      return;
+      perCat[it.cat] = perCat[it.cat] || { n: 0, picked: [] };
+      perCat[it.cat].n += 1;
+      perCat[it.cat].picked.push(it);
+      picked.push({ ...it, why: why === '重复' ? `AI：与 ${d.dupOf} 重复` : 'AI：出戏/空话' });
     }
-    log('写回校验通过：' + summary);
+
+    // 每类最多删 30%，facts 至少留 3 条
+    const out2 = [];
+    const total = {};
+    for (const it of items) total[it.cat] = (total[it.cat] || 0) + 1;
+    const allowed = (cat) => {
+      const t = total[cat] || 0;
+      let cap = Math.max(1, Math.floor(t * 0.3));
+      if (cat === 'fact') cap = Math.min(cap, Math.max(0, t - 3));
+      return cap;
+    };
+    const used = {};
+    for (const p of picked) {
+      used[p.cat] = (used[p.cat] || 0) + 1;
+      if (used[p.cat] > allowed(p.cat)) continue;
+      out2.push(p);
+    }
+    if (out2.length) log(`AI 复审：建议删 ${out2.length} 条（${out2.map((x) => x.id + ' ' + x.why).join('；')}）`);
+    return out2.map((x) => ({ cat: x.cat, target: x.target || '', text: x.text, reason: x.why, id: x.id }));
+  } catch (e) {
+    log('AI 复审异常：' + e.message);
+    return [];
+  }
+}
+
+/** 把 AI 挑出来的条目从 out 里摘掉 */
+function applyJudge(out, judged) {
+  const drop = new Set(judged.map((j) => j.id));
+  const facts = out.facts.filter((_, i) => !drop.has(`F${i + 1}`));
+  const topics = out.topics.filter((_, i) => !drop.has(`T${i + 1}`));
+  const thoughts = out.thoughts.filter((_, i) => !drop.has(`H${i + 1}`));
+  const impressions = {};
+  for (const [target, im] of Object.entries(out.impressions)) {
+    const traits = im.traits.filter((_, i) => !drop.has(`I${target}#${i + 1}`));
+    if (traits.length) impressions[target] = { ...im, traits };
+  }
+  return { topics, impressions, thoughts, facts };
+}
+
+/** 全量扫一遍「现在还有没有没用的」，返回清单（不修改） */
+function scan(mem) {
+  const found = [];
+  for (const t of mem.activeTopics || []) {
+    const why = junkReason(t.text);
+    if (why) found.push({ cat: 'activeTopic', text: String(t.text || ''), reason: why });
+  }
+  for (const t of mem.pendingThoughts || []) {
+    const why = junkReason(typeof t === 'string' ? t : t.text);
+    if (why) found.push({ cat: 'pendingThought', text: String(typeof t === 'string' ? t : t.text || ''), reason: why });
+  }
+  for (const [target, im] of Object.entries(mem.memberImpressions || {})) {
+    for (const trait of im.traits || []) {
+      const why = junkReason(trait);
+      if (why) found.push({ cat: 'memberImpression', target, text: String(trait || ''), reason: why });
+    }
+  }
+  for (const f of mem.facts || []) {
+    const text = typeof f === 'string' ? f : f && f.text;
+    const why = junkReason(text);
+    if (why) found.push({ cat: 'fact', text: String(text || ''), reason: why });
+  }
+  return found;
+}
+
+// ── 主流程：清 → 写 → 再读回来查 → 还脏就再清 ────────────────────────
+
+async function main() {
+  const mem0 = await readMem();
+  if (!mem0) { log('读不到记忆，退出'); return; }
+
+  // 纯体检模式：只报告
+  if (CHECK_ONLY) {
+    const junk = scan(mem0);
+    const probe = {
+      facts: (mem0.facts || []).map((f) => (typeof f === 'string' ? f : f.text)),
+      topics: mem0.activeTopics || [],
+      thoughts: (mem0.pendingThoughts || []).map((t) => (typeof t === 'string' ? t : t.text)),
+      impressions: mem0.memberImpressions || {},
+    };
+    const judged = await aiJudge(probe);
+    if (!junk.length && !judged.length) { log('体检：没有发现没用的条目'); return; }
+    log(`体检：规则发现 ${junk.length} 条，模型发现 ${judged.length} 条`);
+    for (const j of junk) log(`  · [${j.cat}${j.target ? '/' + j.target : ''}] ${j.reason} ｜ ${j.text.slice(0, 60)}`);
+    for (const j of judged) log(`  · [${j.cat}${j.target ? '/' + j.target : ''}] ${j.reason} ｜ ${j.text.slice(0, 60)}`);
     return;
   }
-  log('已整理：', summary);
+
+  let snapshotDone = false;
+  for (let round = 1; round <= ROUNDS; round++) {
+    const mem = round === 1 ? mem0 : await readMem();
+    if (!mem) { log(`第 ${round} 轮：读不到记忆，退出`); break; }
+
+    const junkBefore = scan(mem);
+    let { out, removed } = await tidy(mem);
+
+    // 规则清完，再让模型找一遍「换个说法但说的是同一件事」和出戏台词
+    const judged = await aiJudge(out);
+    if (judged.length) {
+      out = applyJudge(out, judged);
+      removed = [...removed, ...judged];
+    }
+
+    const summary =
+      `话题 ${(mem.activeTopics || []).length}→${out.topics.length}｜` +
+      `印象 ${Object.keys(mem.memberImpressions || {}).length}→${Object.keys(out.impressions).length} 人｜` +
+      `想法 ${(mem.pendingThoughts || []).length}→${out.thoughts.length}｜` +
+      `长期事实 ${(mem.facts || []).length}→${out.facts.length}`;
+
+    // 用「同样的形状」比对，判断这轮到底改了什么（不想因为字段顺序误判成有变化）
+    const flat = (m) => ({
+      topics: (m.activeTopics || []).map((t) => t.text),
+      thoughts: (m.pendingThoughts || []).map((t) => (typeof t === 'string' ? t : t.text)),
+      facts: (m.facts || []).map((f) => (typeof f === 'string' ? f : f.text)),
+      impressions: Object.fromEntries(Object.entries(m.memberImpressions || {}).map(([k, v]) => [k, v.traits || []])),
+    });
+    const changed = JSON.stringify(flat(mem)) !== JSON.stringify(out);
+
+    // 硬账：少了多少条，就必须有同样多的删除记录，否则宁可不写
+    const lost = lossCheck(mem, out, removed);
+    if (lost.length) {
+      log('⚠️ 有记忆在整理过程中凭空变少（' + lost.join('，') + '），这次不写，保留原样');
+      break;
+    }
+
+    if (!removed.length && !changed) {
+      log(`第 ${round} 轮：干净了${round > 1 ? '（已清完）' : '，无需改动'}`);
+      if (round === 1) log('记忆已经是最优状态');
+      break;
+    }
+
+    if (DRY) {
+      log(`[dry-run] 第 ${round} 轮：`, summary, `｜将删除 ${removed.length} 条`);
+      for (const r of removed) log(`  - [${r.cat}${r.target ? '/' + r.target : ''}] ${r.reason} ｜ ${r.text.slice(0, 60)}`);
+      break;
+    }
+
+    if (!snapshotDone) { snapshot(mem, 1); snapshotDone = true; }
+
+    log(`第 ${round} 轮：${summary}｜删除 ${removed.length} 条${junkBefore.length ? `（其中 ${junkBefore.length} 条是垃圾）` : ''}`);
+    for (const r of removed) log(`  - [${r.cat}${r.target ? '/' + r.target : ''}] ${r.reason} ｜ ${r.text.slice(0, 60)}`);
+
+    await writeMem(out);
+    audit(removed);
+
+    const back = await readMem();
+    if (!back) { log('写回后读不回来，停手'); break; }
+    const bad = verify(out, back);
+    if (bad.length) {
+      log('⚠️ 写回后数量对不上（' + bad.join('，') + '），用快照恢复');
+      snapshotRestore(mem);
+      break;
+    }
+
+    // 关键一步：写完了再查一遍，脏就继续下一轮
+    const left = scan(back);
+    if (!left.length) { log(`第 ${round} 轮写回校验通过，检查过：没有没用的了`); break; }
+    log(`第 ${round} 轮写完复查：还剩 ${left.length} 条没用的，再清一轮`);
+    if (round === ROUNDS) log('已达最大轮数，剩下的下次再清');
+  }
+}
+
+async function snapshotRestore(mem) {
+  try {
+    await writeMem({
+      topics: (mem.activeTopics || []).map((t) => ({ ...t })),
+      impressions: Object.fromEntries(Object.entries(mem.memberImpressions || {}).map(([k, v]) => [k, { traits: [...(v.traits || [])], interactionCount: v.interactionCount || 0, lastSeenAt: v.lastSeenAt || 0 }])),
+      thoughts: (mem.pendingThoughts || []).map((t) => t.text || t),
+      facts: (mem.facts || []).map((f) => (typeof f === 'string' ? f : f.text)).filter(Boolean),
+    });
+    log('已从快照恢复');
+  } catch (e) { log('恢复失败（快照文件还在 chat-memory/）:', e.message); }
 }
 
 await main();
