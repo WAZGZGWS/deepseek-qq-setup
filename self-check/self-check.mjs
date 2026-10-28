@@ -129,7 +129,9 @@ async function checkMemory() {
   say(junk.length === 0, junk.length ? `记忆里有 ${junk.length} 条没用的：${junk.slice(0, 3).map((j) => j.cat + '/' + j.reason).join('，')}` : '记忆里没有垃圾条目');
 
   const chars = memoryChars(memRaw);
-  const budget = Number(process.env.MEMORY_BUDGET_CHARS || 4500);
+  // 上限 = 各类上限加起来的天花板（facts 2200 + 话题 12×80 + 印象 10×120 + 想法 5×120 ≈ 5000）
+  // 平时只有几百字，这里防的是「某类失控长成一大坨」
+  const budget = Number(process.env.MEMORY_BUDGET_CHARS || 5500);
   say(chars <= budget, `记忆体积 ${chars} 字（预算 ${budget}）`);
 
   try {
