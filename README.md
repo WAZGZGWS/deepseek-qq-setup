@@ -465,8 +465,10 @@ SUPERVISOR_BAT    20-supervisor.bat
 ├── maintenance/      日志轮转 + 备份
 ├── memory-summary/   每日摘要
 ├── memory-tidy/      记忆整理
+├── napcat-watchdog/  掉线弹窗（stack-doctor 调它）
 ├── notify/           告警出口
 ├── patches/          补丁自检
+├── patrol/           每日巡检（09:00 / 21:00）
 ├── power-guard/      断电保护
 ├── regression/       回归测试
 ├── roles/            人设（自己写）
@@ -476,7 +478,7 @@ SUPERVISOR_BAT    20-supervisor.bat
 ├── stack-guard/      整链守护
 ├── supervisor/       进程总管
 ├── tools/            零散工具（关网卡省电等）
-└── versions/         版本快照
+└── versions/         版本快照（23:40 自动打）
 
 根目录还有：
   config.example.json            桥接配置模板（复制成 config.json）

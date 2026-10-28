@@ -17,7 +17,8 @@ notify.json
 notify.local.json
 
 # 聊天归档（含真实对话）
-archive/
+archive/*
+!archive/collector.mjs
 chat-memory/
 backups/
 versions/

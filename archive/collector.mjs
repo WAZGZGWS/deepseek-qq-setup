@@ -1,0 +1,151 @@
+#!/usr/bin/env node
+import { singleInstance } from '../lock/single.mjs';
+singleInstance('archive');
+/**
+ * chat-archive —— 把她和哥的聊天全量落到 E 盘（按天一个 md），
+ * 供 chat_search 工具检索，做到「换会话也不真失忆」。
+ *
+ * 每 60 秒拉一次最近消息，去重后追加。
+ *
+ * 去重键：有 seq 用 seq，没有 seq（她自己发的那半）用 time。
+ * 早先只认 seq，结果她的话全被 NaN 过滤掉，档案只剩哥单方面；
+ * 而且滑动窗口偶尔会把旧消息重复追加。这里改成显式 key 集合去重。
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+
+const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const ROOT = path.join(HERE, '..');
+const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
+const STATE = path.join(BRIDGE, 'state');
+const OUT = path.join(HERE, 'logs');
+const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
+const INTERVAL = Math.max(30, Number(process.env.INTERVAL_SEC || 60)) * 1000;
+const CURSOR = path.join(STATE, 'archive-cursor.json');
+const KEEP_KEYS = 400;
+
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+const hhmm = (t) => new Date(t).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }).slice(0, 5);
+
+function token() {
+  return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim();
+}
+
+function readCursor() {
+  try { return JSON.parse(fs.readFileSync(CURSOR, 'utf8')); } catch { return {}; }
+}
+function writeCursor(v) {
+  try { fs.writeFileSync(CURSOR, JSON.stringify(v)); } catch {}
+}
+
+function log(...a) {
+  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  console.log(line);
+  try { fs.appendFileSync(path.join(STATE, 'archive.log'), line + '\n'); } catch {}
+}
+
+function clean(s) {
+  return String(s || '').replace(/\r/g, '').replace(/\n+/g, ' ').trim().slice(0, 500);
+}
+
+// 一条消息的稳定去重键
+function msgKey(m) {
+  // key 必须**全局唯一**，不能只用 seq。
+  // 2026-10-28 的坑：哥那边消息带的是 seq，但 seq 是「每个会话/每次桥接重启重新计数」的，
+  // 于是今天的 s3、s4 和昨天档案里的 s3、s4 撞在一起，seen 一判就当成"已归档"跳过 ——
+  // 档案里永远只有她自己的话。把时间戳拼进去就不会撞了。
+  const t = Number(m.time || 0);
+  if (m.seq !== undefined && m.seq !== null && Number.isFinite(Number(m.seq))) {
+    return `s${Number(m.seq)}@${t}`;
+  }
+  if (m.messageId) return `i${m.messageId}@${t}`;
+  if (t) return `t${t}`;
+  return '';
+}
+
+// 游标丢了/是旧格式时，从已有档案的最后一行时间推断归档水位，
+// 免得把整天消息重新刷一遍（state 目录 ACL 收紧后未必写得进去）。
+function inferLastTime(day) {
+  try {
+    const file = path.join(OUT, `${day}.md`);
+    if (!fs.existsSync(file)) return 0;
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+    let last = 0;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const m = lines[i].match(/^- (\d{2}):(\d{2})\s/);
+      if (m) {
+        const t = new Date(`${day}T${m[1]}:${m[2]}:59+08:00`).getTime();
+        if (Number.isFinite(t)) last = Math.max(last, t);
+      }
+    }
+    return last;
+  } catch { return 0; }
+}
+
+async function tick() {
+  const r = await fetch(`http://127.0.0.1:3100/api/socialV2/recent?key=${encodeURIComponent(KEY)}&limit=80`, {
+    headers: { 'x-console-token': token() },
+    signal: AbortSignal.timeout(15000),
+  });
+  const j = await r.json();
+  const msgs = Array.isArray(j.messages) ? j.messages : [];
+
+  const cursor = readCursor();
+  const st = cursor[KEY] && typeof cursor[KEY] === 'object' ? cursor[KEY] : null;
+  let seen = new Set(Array.isArray(st?.seen) ? st.seen : []);
+  // 兼容老格式：**只有在游标还是旧格式（一个数字）时才启用**。
+  // 2026-10-28 的 bug：新格式里也存了 maxSeq，于是这条"老游标兜底"把
+  // 所有带 seq 的消息（恰好都是哥发的）永久跳过 —— 两天的档案里只有她自己的话。
+  const legacySeq = st ? 0 : Number(cursor[KEY] || 0);
+  // 已归档到的最后时间：比它早的一律不补，防止重建/换会话后把旧消息再刷一遍
+  const lastTime = Number(st?.lastTime || 0) || inferLastTime(today());
+
+  // 按时间排序（seq 只在哥的消息上有，不能作为全局序）
+  const ordered = msgs
+    .filter((m) => m && (m.plain || m.text))
+    .sort((a, b) => Number(a.time || 0) - Number(b.time || 0));
+
+  const lines = [];
+  let added = 0;
+  let maxTime = lastTime;
+  for (const m of ordered) {
+    const key = msgKey(m);
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    const mt = Number(m.time || 0);
+    // 比已归档水位还早的：只记 key，不写文件（防重复刷旧消息）
+    if (lastTime && mt <= lastTime) { seen.add(key); continue; }
+    // 老游标兜底：比已知最大 seq 小的旧消息不再补写
+    if (key.startsWith('s') && legacySeq && Number(key.slice(1)) <= legacySeq) {
+      seen.add(key);
+      continue;
+    }
+    seen.add(key);
+    added += 1;
+    maxTime = Math.max(maxTime, mt);
+    const who = m.isSelf ? '<BOT_NAME>' : (m.isOwner ? '哥' : (m.sender || m.userId || '?'));
+    const text = clean(m.plain || m.text);
+    const t = m.time ? hhmm(m.time) : '';
+    lines.push(`- ${t} **${who}**：${text}`);
+  }
+
+  if (lines.length) {
+    fs.mkdirSync(OUT, { recursive: true });
+    const file = path.join(OUT, `${today()}.md`);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, `# ${today()} 聊天记录\n\n`);
+    fs.appendFileSync(file, lines.join('\n') + '\n');
+    log(`归档 ${added} 条 -> ${path.basename(file)}`);
+  }
+
+  // 只留最近 KEEP_KEYS 个键，文件不无限膨胀
+  const all = Array.from(seen);
+  cursor[KEY] = { seen: all.slice(-KEEP_KEYS), maxSeq: legacySeq, lastTime: maxTime, updatedAt: Date.now() };
+  writeCursor(cursor);
+}
+
+const ONCE = process.argv.includes('--once');
+
+log(`聊天归档${ONCE ? '（单次）' : ''}启动：${KEY} → ${OUT}，每 ${INTERVAL / 1000}s`);
+await tick().catch((e) => log('首次归档失败:', e.message));
+if (ONCE) process.exit(0);
+setInterval(() => void tick().catch((e) => log('归档失败:', e.message)), INTERVAL);
