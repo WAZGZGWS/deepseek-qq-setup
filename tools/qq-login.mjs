@@ -145,8 +145,26 @@ async function passwordLogin() {
   // 注意顺序：QQ 要验证时也返回 code=0，只是 data 里带 needCaptcha/needNewDevice。
   // 先判 code 会把它当成「已发送」，看门狗就会一直重试 —— 越试风控越紧（2026-10-28 踩过）。
   if (res?.data?.needCaptcha) {
-    console.log('需要人工验证（短信/验证码）：' + (res.data.proofWaterUrl || ''));
-    console.log('打开上面的链接，用绑定手机收验证码完成验证；验证完再跑一次 password');
+    const url = res.data.proofWaterUrl || '';
+    console.log('需要人工验证（短信/验证码）：' + url);
+    console.log('打开上面的链接，用绑定手机收验证码完成验证；验证完**不要重跑脚本**，等我轮询结果');
+    // 关键：验证是跟这次请求的 sid 绑定的。这里开始轮询，别再发新的登录请求，
+    // 否则旧的 sid 作废、你验完也白验（2026-10-28 来回折腾了三次才搞明白）。
+    const waitSec = Number(process.env.WAIT_SEC || 0);
+    if (waitSec > 0) {
+      const cred2 = await auth();
+      const until = Date.now() + waitSec * 1000;
+      while (Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const st = await call(cred2, '/CheckLoginStatus');
+        const d = st?.data || {};
+        if (d.isLogin) { console.log('验证通过，已登录'); return true; }
+        if (d.loginError) { console.log('登录报错：' + d.loginError); break; }
+      }
+      console.log('轮询超时（还没登进去）。验证链接可能过期了，重跑一次会生成新链接。');
+      process.exitCode = 2;
+      return false;
+    }
     process.exitCode = 2;
     return false;
   }
