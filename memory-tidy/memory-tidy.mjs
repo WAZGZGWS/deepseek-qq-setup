@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, STATE, stamp, chatKey, consoleApi as api } from '../lib/base.mjs';
+import { cutText, importance, junkReason, memoryChars, norm, overlap, scanMemory, similar } from '../lib/memory-rules.mjs';
 
 const KEY = chatKey();
 const DRY = process.argv.includes('--dry') || process.env.DRY_RUN === '1';
@@ -32,7 +33,9 @@ const MAX_TRAITS = Number(process.env.MAX_TRAITS || 10);
 const MAX_TRAIT_CHARS = Number(process.env.MAX_TRAIT_CHARS || 120);
 const MAX_TOPICS = Number(process.env.MAX_TOPICS || 12);
 const TOPIC_TTL_DAYS = Number(process.env.TOPIC_TTL_DAYS || 14);
-const MAX_FACTS = Number(process.env.MAX_FACTS || 40);
+// 条数上限放高、字数预算管住：能装 60 条短事实，比只装 40 条长句子实用。
+// 真正的闸门是 FACT_BUDGET_CHARS（默认 2200 字），别让"条数"误伤短而准的事实。
+const MAX_FACTS = Number(process.env.MAX_FACTS || 60);
 const MAX_FACT_CHARS = Number(process.env.MAX_FACT_CHARS || 60);
 const MAX_TOPIC_CHARS = Number(process.env.MAX_TOPIC_CHARS || 80);
 const MAX_THOUGHTS = Number(process.env.MAX_THOUGHTS || 5);
@@ -59,86 +62,6 @@ function audit(list) {
       return;
     } catch {}
   }
-}
-
-// ── 判重 / 判垃圾 ────────────────────────────────────────────────────
-
-/** 归一化：去空白、去标点、去大小写差异，用于判重 */
-function norm(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/\s+/g, '')
-    .replace(/[，。；、,.;!?！？:：~～…—\-（）()"'"'《》]/g, '');
-}
-
-/** 中文按二字切片，比单个字更能看出「是不是同一句话」 */
-function bigrams(s) {
-  const out = new Set();
-  for (let i = 0; i < s.length - 1; i++) out.add(s.slice(i, i + 2));
-  return out;
-}
-
-/** 近似判定：完全相同 / 一条是另一条的前缀 / 字重合度高 / 二字切片重合度高 */
-function similar(a, b) {
-  const x = norm(a);
-  const y = norm(b);
-  if (!x || !y) return false;
-  if (x === y) return true;
-  if (x.length >= 8 && y.length >= 8 && (x.startsWith(y) || y.startsWith(x))) return true;
-
-  const sx = new Set(x);
-  const sy = new Set(y);
-  let inter = 0;
-  for (const ch of sx) if (sy.has(ch)) inter += 1;
-  const union = sx.size + sy.size - inter;
-  if (union > 0 && inter / union >= 0.85) return true;
-
-  // 二字切片：抓「换了个说法但说的是同一件事」
-  const bx = bigrams(x);
-  const by = bigrams(y);
-  if (bx.size < 3 || by.size < 3) return false;
-  let bi = 0;
-  for (const g of bx) if (by.has(g)) bi += 1;
-  const bu = bx.size + by.size - bi;
-  return bu > 0 && bi / bu >= 0.72;
-}
-
-/** 截断：优先切在句读上，别把一句话切成「…；妹」这种残句 */
-function cutText(s, max) {
-  const t = String(s || '').trim();
-  if (t.length <= max) return t;
-  const head = t.slice(0, max);
-  const at = Math.max(
-    head.lastIndexOf('。'), head.lastIndexOf('；'), head.lastIndexOf('！'),
-    head.lastIndexOf('？'), head.lastIndexOf('，'), head.lastIndexOf(' '),
-  );
-  // 切点太靠前就别切了，硬截断也比只剩半句强
-  if (at >= Math.floor(max * 0.6)) return head.slice(0, at).trim();
-  return head.trim();
-}
-
-/** 纯语气词/寒暄：去掉标点后只剩这些字，且很短 */
-const FILLER = /^[嗯啊哦噢好行对是哈呵嘿啦呀吧的吗呢么了收到在]+$/;
-/** 只有标点、符号、数字、空白 */
-const ONLY_SYMBOLS = /^[\p{P}\p{S}\d\s]+$/u;
-
-/** 明确属于「垃圾/污染」的模式，返回原因；没问题返回空串 */
-function junkReason(text) {
-  const t = String(text || '').trim();
-  if (!t) return '空条目';
-  if (t.length < 4) return '太短，没有信息量';
-  if (/^(.)\1{3,}$/.test(t)) return '同一个字重复';
-
-  const rules = [
-    ['占位符/脏数据', /<BOT_NAME>|YOUR_QQ|YOUR_BOT_QQ|YOUR_PC|undefined|\bnull\b|NaN|\[object Object\]|TODO|占位/i],
-    ['出戏/meta 台词', /我是\s*AI|作为(一个)?\s*(AI|助手|语言模型)|语言模型|系统提示|根据聊天(记录)?|聊天记录显示|以上是|以下是|无法确定|抱歉[，,]/],
-    ['指令/提示词残留', /请把|请提炼|输出\s*JSON|system\s*prompt|提示词/],
-    ['代码或链接', /https?:\/\/|```|function\s*\(|=>|<\/?[a-z][a-z0-9]*>/],
-    ['只有符号或数字', ONLY_SYMBOLS],
-    ['只有语气词', FILLER],
-  ];
-  for (const [why, re] of rules) if (re.test(t)) return why;
-  return '';
 }
 
 /** 去空、去垃圾、按句读截断，返回保留项和删掉的项 */
@@ -340,6 +263,28 @@ async function tidy(mem) {
   removed.push(...afterAI.removed);
   factsNew = afterAI.kept;
 
+  // ── 记忆预算：事实越长，每句话都要重发一遍，烧的是 token ────────────
+  // 超预算时按「重要程度」砍：数字/日期/作息/健康/口味留着，「今天/刚才」这类先走。
+  const FACT_BUDGET = Number(process.env.FACT_BUDGET_CHARS || 2200);
+  const factChars0 = factsNew.reduce((a, s) => a + s.length, 0);
+  if (factChars0 > FACT_BUDGET) {
+    const scored = factsNew.map((t, i) => ({ t, i, s: importance(t) }));
+    const byScore = [...scored].sort((a, b) => b.s - a.s || a.i - b.i);
+    const keep = [];
+    let used = 0;
+    for (const x of byScore) {
+      if (used + x.t.length > FACT_BUDGET) {
+        removed.push({ cat: 'fact', text: x.t, reason: `超出记忆预算 ${FACT_BUDGET} 字（先留更长期有用的）` });
+        continue;
+      }
+      used += x.t.length;
+      keep.push(x);
+    }
+    keep.sort((a, b) => a.i - b.i); // 恢复原来的顺序，别把记忆顺序打乱
+    factsNew = keep.map((x) => x.t);
+    log(`记忆预算：事实 ${factChars0} 字 → ${used} 字（上限 ${FACT_BUDGET}，砍掉 ${byScore.length - keep.length} 条）`);
+  }
+
   const out = { topics, impressions, thoughts, facts: factsNew };
   const summary =
     `话题 ${(mem.activeTopics || []).length}→${topics.length}｜` +
@@ -347,6 +292,21 @@ async function tidy(mem) {
     `想法 ${(mem.pendingThoughts || []).length}→${thoughts.length}｜` +
     `长期事实 ${factsIn.length}→${factsNew.length}`;
   return { out, removed, summary };
+}
+
+function writeStats(out) {
+  try {
+    const data = {
+      at: new Date().toISOString(),
+      facts: out.facts.length,
+      topics: out.topics.length,
+      thoughts: out.thoughts.length,
+      people: Object.keys(out.impressions).length,
+      traits: Object.values(out.impressions).reduce((a, v) => a + (v.traits || []).length, 0),
+      chars: memoryChars(out),
+    };
+    fs.writeFileSync(path.join(STATE, 'memory-stats.json'), JSON.stringify(data, null, 2));
+  } catch {}
 }
 
 async function writeMem(out) {
@@ -427,15 +387,6 @@ function lossCheck(mem, out, removed) {
   return bad;
 }
 
-/** 两条之间的二字重合度，0~1。用来卡「模型说重复但其实说的不是一件事」 */
-function overlap(a, b) {
-  const x = bigrams(norm(a));
-  const y = bigrams(norm(b));
-  if (x.size < 3 || y.size < 3) return 0;
-  let inter = 0;
-  for (const g of x) if (y.has(g)) inter += 1;
-  return inter / (x.size + y.size - inter);
-}
 
 /**
  * 模型复审：规则抓不到「换个说法但说的是同一件事」，交给模型找重复。
@@ -554,30 +505,7 @@ function applyJudge(out, judged) {
   return { topics, impressions, thoughts, facts };
 }
 
-/** 全量扫一遍「现在还有没有没用的」，返回清单（不修改） */
-function scan(mem) {
-  const found = [];
-  for (const t of mem.activeTopics || []) {
-    const why = junkReason(t.text);
-    if (why) found.push({ cat: 'activeTopic', text: String(t.text || ''), reason: why });
-  }
-  for (const t of mem.pendingThoughts || []) {
-    const why = junkReason(typeof t === 'string' ? t : t.text);
-    if (why) found.push({ cat: 'pendingThought', text: String(typeof t === 'string' ? t : t.text || ''), reason: why });
-  }
-  for (const [target, im] of Object.entries(mem.memberImpressions || {})) {
-    for (const trait of im.traits || []) {
-      const why = junkReason(trait);
-      if (why) found.push({ cat: 'memberImpression', target, text: String(trait || ''), reason: why });
-    }
-  }
-  for (const f of mem.facts || []) {
-    const text = typeof f === 'string' ? f : f && f.text;
-    const why = junkReason(text);
-    if (why) found.push({ cat: 'fact', text: String(text || ''), reason: why });
-  }
-  return found;
-}
+const scan = scanMemory;
 
 // ── 主流程：清 → 写 → 再读回来查 → 还脏就再清 ────────────────────────
 
@@ -642,6 +570,7 @@ async function main() {
     if (!removed.length && !changed) {
       log(`第 ${round} 轮：干净了${round > 1 ? '（已清完）' : '，无需改动'}`);
       if (round === 1) log('记忆已经是最优状态');
+      writeStats(out); // 干净时也记一笔，self-check 才有得比
       break;
     }
 
@@ -658,6 +587,7 @@ async function main() {
 
     await writeMem(out);
     audit(removed);
+    writeStats(out);
 
     const back = await readMem();
     if (!back) { log('写回后读不回来，停手'); break; }

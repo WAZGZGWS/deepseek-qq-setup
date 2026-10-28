@@ -178,6 +178,24 @@ check('没有脚本再抄一份路径样板', () => {
   return bad.length === 0 || `又抄回去了：${bad.join(', ')}（应该 import lib/base.mjs）`;
 });
 
+// ---- 记忆规则只许有一份（memory-tidy 清、self-check 查，必须同一套）----
+check('记忆规则只有一份（lib/memory-rules.mjs）', () => {
+  const p = path.join(ROOT, 'lib', 'memory-rules.mjs');
+  if (!fs.existsSync(p)) return '缺 lib/memory-rules.mjs';
+  const tidy = fs.readFileSync(path.join(ROOT, 'memory-tidy', 'memory-tidy.mjs'), 'utf8');
+  const self = fs.readFileSync(path.join(ROOT, 'self-check', 'self-check.mjs'), 'utf8');
+  const bad = [];
+  if (!tidy.includes("from '../lib/memory-rules.mjs'")) bad.push('memory-tidy 没用公共规则');
+  if (!self.includes("from '../lib/memory-rules.mjs'")) bad.push('self-check 没用公共规则');
+  if (/function junkReason\(/.test(tidy + self)) bad.push('有人又抄了一份 junkReason');
+  return bad.length === 0 || bad.join('；');
+});
+check('会话和附件会自动清（省空间）', () => {
+  const s = fs.readFileSync(path.join(ROOT, 'session-janitor', 'session-janitor.mjs'), 'utf8');
+  const ok = /SESSION_KEEP_DAYS/.test(s) && /ATTACH_KEEP_DAYS/.test(s) && /pruneOld\(/.test(s);
+  return ok || 'session-janitor 里没有保留天数/清理逻辑';
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {

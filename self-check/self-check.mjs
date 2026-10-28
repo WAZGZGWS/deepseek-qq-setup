@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { ROOT, BRIDGE, STATE, stamp, today, chatKey, consoleToken as token } from '../lib/base.mjs';
+import { memoryChars, scanMemory } from '../lib/memory-rules.mjs';
 
 async function api(pathname) {
   try {
@@ -121,6 +122,27 @@ async function checkMemory() {
 
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
   say(fs.existsSync(path.join(ARCHIVE, `${today}.md`)), `今天（${today}）的聊天档案存在`);
+
+  // ── 记忆质量：有没有垃圾 / 体积有没有失控 / 数量有没有一夜暴跌 ──────
+  const memRaw = raw.raw || {};
+  const junk = scanMemory(memRaw);
+  say(junk.length === 0, junk.length ? `记忆里有 ${junk.length} 条没用的：${junk.slice(0, 3).map((j) => j.cat + '/' + j.reason).join('，')}` : '记忆里没有垃圾条目');
+
+  const chars = memoryChars(memRaw);
+  const budget = Number(process.env.MEMORY_BUDGET_CHARS || 4500);
+  say(chars <= budget, `记忆体积 ${chars} 字（预算 ${budget}）`);
+
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(STATE, 'memory-stats.json'), 'utf8'));
+    const prev = Number(st.facts || 0);
+    const now = apiCount;
+    // 一次整理正常只会少几条；少掉三成以上多半是出事了（写丢、被清空）
+    const dropped = prev - now;
+    say(prev === 0 || dropped <= Math.max(2, Math.floor(prev * 0.3)), `长期事实 ${prev} → ${now}（没异常暴跌）`);
+    say(st.chars === undefined || Number(st.chars) <= budget * 1.5, `上次整理记录 ${st.facts} 条 / ${st.chars ?? '?'} 字`);
+  } catch {
+    // 还没有记录（新部署），不算问题
+  }
 }
 
 // ── 3.5) 档案是不是只记了一方 ──────────────────────────────────────
