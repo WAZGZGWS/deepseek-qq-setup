@@ -226,6 +226,17 @@ check('带中文的 .ps1 必须有 UTF-8 BOM', () => {
   return bad.length === 0 || `没有 BOM：${bad.join(', ')}（PowerShell 5.1 会按 GBK 读，中文会炸）`;
 });
 
+check('滴眼药水做完就不再提', () => {
+  // 2026-10-28：哥明明做完了，还被念了三遍。规则是「认出做完 → DELETE 掉没执行的提醒」。
+  const s = fs.readFileSync(path.join(ROOT, 'eye-drop', 'eye-drop.mjs'), 'utf8');
+  const bad = [];
+  if (!/function isDoneText\(/.test(s)) bad.push('没有 isDoneText 判断');
+  if (!/findDoneInLines\(/.test(s)) bad.push('没有 findDoneInLines（语境判断）');
+  if (!/DELETE/.test(s)) bad.push('没有撤销没执行的提醒');
+  if (!/--selftest/.test(s)) bad.push('没有自测');
+  return bad.length === 0 || bad.join('；');
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {
