@@ -17,6 +17,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { ROOT, BRIDGE, STATE, stamp, today, chatKey, consoleToken as token } from '../lib/base.mjs';
 import { memoryChars, scanMemory } from '../lib/memory-rules.mjs';
+import { WORKER_NAMES } from '../supervisor/workers.mjs';
 
 async function api(pathname) {
   try {
@@ -76,7 +77,7 @@ function checkRestartLoop() {
     // 只看最近 3 分钟：更早的退出可能是已经修好的历史残留，报出来是假警报
     if (Number.isFinite(t) && now - t < 3 * 60 * 1000) { exits++; names.add(m[2]); }
   }
-  say(exits < 5, exits === 0 ? '最近 3 分钟没有异常退出' : `最近 3 分钟退出 ${exits} 次（${[...names].join(',')}）—— 疑似重启循环`);
+  say(exits < 5, exits === 0 ? '最近 3 分钟没有异常退出' : `最近 3 分钟退出 ${exits} 次（${[...names].join(',')}）${exits >= 5 ? '—— 疑似重启循环' : '（改代码触发的热重载也算，次数少就没事）'}`);
 
   let locks = [];
   try {
@@ -98,6 +99,13 @@ function checkRestartLoop() {
   } else {
     say(true, `${locks.length} 个 worker 锁都在心跳`);
   }
+
+  // 名单上有的、但根本没在跑（连锁都没有）——这个最阴：
+  // 2026-10-28 加了 peak-watch，supervisor 没重读名单，它一直不存在，
+  // 但「锁都在心跳」照样显示绿。
+  const running = new Set(locks.map((f) => f.replace('.lock', '')));
+  const missing = WORKER_NAMES.filter((n) => !running.has(n));
+  say(missing.length === 0, missing.length ? `这些 worker 名单上有、但没在跑：${missing.join(', ')}` : `名单上 ${WORKER_NAMES.length} 个 worker 全在跑`);
 }
 
 // ── 3) 记忆一致性 ────────────────────────────────────────────────
