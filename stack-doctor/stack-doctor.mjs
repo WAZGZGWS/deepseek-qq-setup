@@ -358,7 +358,7 @@ async function main() {
   }, {
     label: 'QQ（NapCat）',
     why: nc.why,
-    manualHint: '需要手动扫码：双击 <STACK_ROOT>\\测试快速登录.bat',
+    manualHint: '需要手动扫码：双击安装目录里的「测试快速登录.bat」',
   });
 
   // 2. 桥接（3000 没起来时桥接必然报错，不必重复判断）
@@ -384,7 +384,7 @@ async function main() {
   }
   await handle(state, 'bridgeStuck', !stuck, () => bridgeRestartViaApi(), {
     label: '桥接（收到消息没处理）',
-    manualHint: '桥接卡住了，自动重启也没救回来。需要手动关掉桥接那个黑窗口，再双击 <STACK_ROOT>\\2-启动桥接.bat。',
+    manualHint: '桥接卡住了，自动重启也没救回来。需要手动关掉桥接那个黑窗口，再双击安装目录里的「2-启动桥接.bat」。',
   });
 
   // 3. DSH 本体——启动文件夹里没有它，一关就全哑
@@ -410,7 +410,7 @@ async function main() {
   }, {
     label: '后台脚本',
     why: `${fresh}/${WORKER_NAMES.length} 个在跑`,
-    manualHint: '后台脚本拉不起来，记忆/余额/定时任务会停。双击 <STACK_ROOT>\\20-supervisor.bat',
+    manualHint: '后台脚本拉不起来，记忆/余额/定时任务会停。双击安装目录里的「20-supervisor.bat」',
   });
 
   saveState(state);
