@@ -82,17 +82,9 @@ DeepSeek Harness                        ← 真正说话的那层
 
 ## 别人下载下来能直接用吗
 
-**能，但你得先把下面四样装好**——这个仓库只提供「运维那一层」，不含机器人本体。
+**能，但要先把那四样装好**（下载地址见下面的 [需要什么](#需要什么)）——这个仓库只做「接上之后」的那一层，机器人本体不在这儿。
 
-| 需要你自己准备 | 为什么仓库里没有 |
-|---|---|
-| **Node.js 20+** | 运行时依赖，自己装更安全 |
-| **DeepSeek Harness 桌面版** | 商业桌面应用，不能分发 |
-| **NapCat Shell** | 要你自己扫码登录 QQ |
-| **桥接 dsh-qq-bridge** | 独立项目，本仓库只调它的接口 |
-| **一个人设** | `roles/README.md` 有模板，性格得你自己写 |
-
-装好之后跑 `install.cmd`，它体检时会告诉你还缺哪个。
+装好人设之后跑 `install.cmd`，体检会告诉你还缺哪个。
 
 ### 已经处理掉的「换台电脑就坏」
 
@@ -132,18 +124,24 @@ DeepSeek Harness                        ← 真正说话的那层
 
 **实际占用**（12 核 / 16 GB 机器实测）：整套 380 MB 磁盘、0.4% 的 CPU、700 MB 内存。详见 [部署后占多少资源](#部署后占多少资源)。
 
-### 软件：四样 + 一个号
+### 软件：下这五个，一个都别多下
 
-| 要准备的 | 干什么用的 | 哪来的 |
-|---|---|---|
-| **Node.js 20+** | 所有脚本的运行时 | [nodejs.org](https://nodejs.org) 下 LTS |
-| **DeepSeek Harness 桌面版** | 真正说话的那层（AI） | 官方安装包 |
-| **NapCat Shell** | QQ 协议层 | [NapCatQQ releases](https://github.com/NapNeko/NapCatQQ/releases) |
-| **桥接 dsh-qq-bridge** | 把 QQ 消息接到 DSH | 独立项目 |
-| **DeepSeek API key** | 调用模型 | platform.deepseek.com |
-| **一个 QQ 小号** | 机器人本体 | 别用大号，有封号风险 |
+| 装什么 | 下载地址 | **具体下哪个** | 干什么用 |
+|---|---|---|---|
+| **Node.js** | https://nodejs.org/zh-cn/download | 下拉到 **LTS** 那一栏 → **Windows 安装包 (.msi)** → 64-bit<br>⚠️ 别下 Current（尝鲜版），也别下 .msi 以外的 | 所有脚本的运行时 |
+| **DeepSeek Harness** | https://www.deepseek.com/download/ | **Windows 版**（下完双击安装，装完先打开登录一次） | 真正说话的那层（AI） |
+| **NapCat** | https://github.com/NapNeko/NapCatQQ/releases | 最新 release 里的 **`NapCat.Shell.Windows.Node.zip`**<br>⚠️ 不是 `Framework`、不是 `OneKey`，就认 `Shell.Node` 这个 | QQ 协议层 |
+| **桥接** | https://github.com/h-D-ACE/dsh-qq | 右侧 **Releases** 里的最新版压缩包（本文档基于 `qq-bridge-enhanced v1.1.0`） | 把 QQ 消息接到 DSH |
+| **7-Zip**（可选） | https://www.7-zip.org/download.html | **64-bit x64** 的 `.exe` | 加密备份用；不装只是备份不加密 |
 
-可选：**7-Zip**（加密备份用，不装只是备份不加密）。
+另外还要两样「不是下载的」：
+
+| 要准备的 | 在哪弄 |
+|---|---|
+| **DeepSeek API key** | https://platform.deepseek.com/api_keys → 创建，`sk-` 开头，复制保存（只显示一次） |
+| **一个 QQ 小号** | 自己注册。⚠️ 别用大号，用非官方协议端有封号风险 |
+
+**下载顺序建议**：Node → DSH → NapCat → 桥接。装完跑 `install.cmd`，它会告诉你还缺哪个。
 
 ## 部署后占多少资源
 
