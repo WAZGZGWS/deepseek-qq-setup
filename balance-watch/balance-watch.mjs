@@ -25,8 +25,10 @@ singleInstance('balance');
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { stamp, dirOf } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const HERE = dirOf(import.meta.url);
+
 const STATE_DIR = path.join(HERE, '..', 'state');
 const STATE_FILE = path.join(STATE_DIR, 'balance-watch.json');
 const LOG_FILE = path.join(STATE_DIR, 'balance-watch.log');
@@ -216,7 +218,7 @@ async function sendQQ(cfg, text) {  if (!cfg.ownerQQ) throw new Error('没有 ow
 }
 
 function log(...args) {
-  const ts = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+  const ts = stamp();
   const line = `[${ts}] ${args.join(' ')}`;
   try { console.log(line); } catch {}
   try {

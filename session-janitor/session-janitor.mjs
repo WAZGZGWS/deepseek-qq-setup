@@ -15,10 +15,7 @@ singleInstance('janitor');
  */
 import fs from 'node:fs';
 import path from 'node:path';
-
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const BRIDGE = path.join(HERE, '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
+import { STATE, stamp, consoleApi as api } from '../lib/base.mjs';
 
 const IDLE_GROUP_H = Number(process.env.IDLE_HOURS_GROUP || 48);
 const IDLE_PRIVATE_H = Number(process.env.IDLE_HOURS_PRIVATE ?? 0); // 0 = 私聊永不重置（保记忆）
@@ -26,7 +23,7 @@ const CHECK_MIN = Math.max(5, Number(process.env.CHECK_MIN || 60));
 const DRY = process.env.DRY_RUN === '1';
 
 function log(...args) {
-  const ts = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+  const ts = stamp();
   const line = `[${ts}] ${args.join(' ')}`;
   console.log(line);
   try {
@@ -39,24 +36,6 @@ function readJson(file, fallback) {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
     return fallback;
-  }
-}
-
-function token() {
-  return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim();
-}
-
-async function api(pathname, options = {}) {
-  const r = await fetch(`http://127.0.0.1:3100${pathname}`, {
-    ...options,
-    headers: { 'content-type': 'application/json', 'x-console-token': token(), ...(options.headers || {}) },
-    signal: AbortSignal.timeout(15000),
-  });
-  const text = await r.text();
-  try {
-    return { status: r.status, body: JSON.parse(text) };
-  } catch {
-    return { status: r.status, body: text };
   }
 }
 

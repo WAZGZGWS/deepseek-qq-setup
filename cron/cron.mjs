@@ -22,9 +22,8 @@ singleInstance('cron');
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { ROOT, stamp } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
 const STATE = path.join(ROOT, 'cron-state.json');
 
 // 错过多少分钟内还补跑（分钟）
@@ -60,7 +59,7 @@ function writeState(s) {
 }
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   console.log(line);
   try {
     const dir = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state');

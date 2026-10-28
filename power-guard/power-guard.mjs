@@ -18,13 +18,20 @@ singleInstance('power');
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { ROOT, STATE, stamp, chatKey, consoleToken as token } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
+async function api(p, options = {}) {
+  const r = await fetch(`http://127.0.0.1:3100${p}`, {
+    ...options,
+    headers: { 'content-type': 'application/json', 'x-console-token': token() },
+    signal: AbortSignal.timeout(15000),
+  });
+  const text = await r.text();
+  try { return JSON.parse(text); } catch { return { raw: text }; }
+}
+
 const MEMDIR = path.join(ROOT, 'chat-memory');
-const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
+const KEY = chatKey();
 const GRACE_MIN = Number(process.env.GRACE_MIN || 8);
 const CRITICAL_PCT = Number(process.env.CRITICAL_PCT || 20);
 const CRITICAL_GRACE_MIN = Number(process.env.CRITICAL_GRACE_MIN || 2);
@@ -36,7 +43,7 @@ let lastSnapshotAt = 0;
 let shuttingDown = false;
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   console.log(line);
   try { fs.appendFileSync(path.join(STATE, 'power.log'), line + '\n'); } catch {}
 }
@@ -52,20 +59,6 @@ function readPower() {
   } catch (e) {
     return { error: e.message };
   }
-}
-
-function token() {
-  return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim();
-}
-
-async function api(p, options = {}) {
-  const r = await fetch(`http://127.0.0.1:3100${p}`, {
-    ...options,
-    headers: { 'content-type': 'application/json', 'x-console-token': token() },
-    signal: AbortSignal.timeout(15000),
-  });
-  const text = await r.text();
-  try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 
 async function snapshot(reason) {

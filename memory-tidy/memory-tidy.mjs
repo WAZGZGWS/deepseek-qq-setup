@@ -13,12 +13,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { ROOT, STATE, stamp, chatKey, consoleApi as api } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
-const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
+const KEY = chatKey();
 const DRY = process.argv.includes('--dry') || process.env.DRY_RUN === '1';
 
 const MAX_TRAITS = Number(process.env.MAX_TRAITS || 10);
@@ -30,23 +27,9 @@ const MAX_FACT_CHARS = Number(process.env.MAX_FACT_CHARS || 60);
 const MAX_TOPIC_CHARS = Number(process.env.MAX_TOPIC_CHARS || 80);
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   console.log(line);
   try { fs.appendFileSync(path.join(STATE, 'memory-tidy.log'), line + '\n'); } catch {}
-}
-
-function token() {
-  return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim();
-}
-
-async function api(p, options = {}) {
-  const r = await fetch(`http://127.0.0.1:3100${p}`, {
-    ...options,
-    headers: { 'content-type': 'application/json', 'x-console-token': token() },
-    signal: AbortSignal.timeout(20000),
-  });
-  const text = await r.text();
-  try { return { status: r.status, body: JSON.parse(text) }; } catch { return { status: r.status, body: text }; }
 }
 
 /** 归一化：去空白、去重复标点，用于判重 */

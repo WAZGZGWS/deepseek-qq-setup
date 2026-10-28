@@ -16,20 +16,11 @@ singleInstance('context');
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { STATE, stamp, chatKey, consoleApi as api, dirOf } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const BRIDGE = path.join(HERE, '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-// CHAT_KEY 不填就自动从桥接 config.json 里读 ownerQQ —— 下载的人不用手改
-function resolveChatKey(bridgeDir) {
-  if (process.env.CHAT_KEY) return process.env.CHAT_KEY;
-  try {
-    const c = JSON.parse(fs.readFileSync(path.join(bridgeDir, 'config.json'), 'utf8'));
-    if (Number(c.ownerQQ)) return `private:${Number(c.ownerQQ)}`;
-  } catch {}
-  return 'private:YOUR_QQ';
-}
-const STATE = path.join(BRIDGE, 'state');
-const KEY = resolveChatKey(BRIDGE);
+const HERE = dirOf(import.meta.url);
+
+const KEY = chatKey();
 const ROTATE_AT = Number(process.env.ROTATE_AT || 24000);
 const URGENT_AT = Number(process.env.URGENT_AT || 34000);
 // 硬上限：到了这个长度就不再管回合忙不忙，直接换。
@@ -43,23 +34,9 @@ const DRY = process.env.DRY_RUN === '1';
 const MARK = path.join(STATE, 'context-guard.json');
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   console.log(line);
   try { fs.appendFileSync(path.join(STATE, 'context-guard.log'), line + '\n'); } catch {}
-}
-
-function token() {
-  return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim();
-}
-
-async function api(pathname, options = {}) {
-  const r = await fetch(`http://127.0.0.1:3100${pathname}`, {
-    ...options,
-    headers: { 'content-type': 'application/json', 'x-console-token': token() },
-    signal: AbortSignal.timeout(20000),
-  });
-  const text = await r.text();
-  try { return { status: r.status, body: JSON.parse(text) }; } catch { return { status: r.status, body: text }; }
 }
 
 function avgContext(n = 20, since = 0) {

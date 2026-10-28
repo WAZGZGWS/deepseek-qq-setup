@@ -10,11 +10,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import net from 'node:net';
+import { ROOT, BRIDGE, portOpen } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
 const STARTUP = path.join(process.env.APPDATA || '', 'Microsoft/Windows/Start Menu/Programs/Startup');
 
 const results = [];
@@ -28,15 +25,6 @@ function check(name, fn) {
 }
 function read(file) {
   return fs.readFileSync(file, 'utf8');
-}
-function portOpen(port) {
-  return new Promise((resolve) => {
-    const s = net.connect({ host: '127.0.0.1', port });
-    const done = (v) => { try { s.destroy(); } catch {} resolve(v); };
-    s.setTimeout(1200, () => done(false));
-    s.once('connect', () => done(true));
-    s.once('error', () => done(false));
-  });
 }
 
 // ---- 角色卡 ----
@@ -172,6 +160,22 @@ check('滴眼药水改为按醒来时间排（固定任务应已停用）', () =
   const j = JSON.parse(fs.readFileSync(f, 'utf8'));
   const fixed = (j.tasks || []).filter((t) => /^滴眼药水/.test(t.name) && t.enabled !== false);
   return fixed.length === 0 || `还有 ${fixed.length} 条固定任务开着（会和 eye-drop 重复提醒）`;
+});
+
+// ---- 公共件不许再被抄回去（2026-10-28 收过一次重复）----
+check('公共件存在（lib/base.mjs）', () => fs.existsSync(path.join(ROOT, 'lib', 'base.mjs')));
+check('没有脚本再抄一份路径样板', () => {
+  const bad = [];
+  for (const ent of fs.readdirSync(ROOT, { withFileTypes: true })) {
+    if (!ent.isDirectory() || ent.name === 'lib' || ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+    const dir = path.join(ROOT, ent.name);
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.mjs')) continue;
+      const t = fs.readFileSync(path.join(dir, f), 'utf8');
+      if (/new URL\(import\.meta\.url\)\.pathname/.test(t)) bad.push(`${ent.name}/${f}`);
+    }
+  }
+  return bad.length === 0 || `又抄回去了：${bad.join(', ')}（应该 import lib/base.mjs）`;
 });
 
 // ---- 输出 ----

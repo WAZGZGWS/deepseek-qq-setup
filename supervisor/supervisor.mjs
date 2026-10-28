@@ -13,15 +13,12 @@ singleInstance('supervisor');
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const STATE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state');
+import { STATE, stamp } from '../lib/base.mjs';
 
 const procs = new Map();
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   // 无窗口启动时 stdout 可能是无效句柄，console.log 会抛 EPIPE/EINVAL 把整个进程带走。
   // 日志以文件为准，控制台只是顺便。
   try { console.log(line); } catch {}

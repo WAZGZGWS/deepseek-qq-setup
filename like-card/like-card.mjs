@@ -11,18 +11,13 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { ROOT, stamp } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
 const STATE_DIR = path.join(ROOT, 'state');
 const STATE_FILE = path.join(STATE_DIR, 'like-card.json');
 const LOG_FILE = path.join(STATE_DIR, 'like-card.log');
 const BRIDGE_CFG = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'config.json');
 const API = process.env.NAPCAT_HTTP || 'http://127.0.0.1:3000';
-
-function stamp() {
-  return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-}
 
 function log(msg) {
   const line = `[${stamp()}] ${msg}`;

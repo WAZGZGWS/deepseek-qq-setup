@@ -14,16 +14,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { BRIDGE, today, PRICE, dirOf } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const BRIDGE = path.join(HERE, '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
+const HERE = dirOf(import.meta.url);
+
 const REPORTS = path.join(HERE, '..', 'reports');
 
 const dayArg = process.argv[2];
 const day = dayArg || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
 
 // DeepSeek 官方价（元 / 百万 token）——按需改
-const PRICE = { cacheHit: 0.2, cacheMiss: 2.0, output: 8.0 };
 
 function readKey() {
   // 以文件为准：用户级环境变量里可能躺着失效的旧 key，会盖掉文件里的有效值

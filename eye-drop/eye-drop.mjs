@@ -19,11 +19,8 @@ singleInstance('eye-drop');
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { ROOT, BRIDGE, stamp, consoleApi as api } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
 const MINE = path.join(ROOT, 'state', 'eye-drop.json');
 const LOG = path.join(ROOT, 'state', 'eye-drop.log');
 const ARCHIVE = path.join(ROOT, 'archive', 'logs');
@@ -33,9 +30,6 @@ const OFFSETS_MIN = (process.env.EYE_DROP_OFFSETS || '2,7,12').split(',').map(Nu
 const WAKE_FROM = Number(process.env.EYE_DROP_FROM_HOUR || 4);   // 早于 4 点不算"醒了"
 const WAKE_TO = Number(process.env.EYE_DROP_TO_HOUR || 12);     // 晚于 12 点不再提醒
 
-function stamp() {
-  return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-}
 function log(msg) {
   const line = `[${stamp()}] ${msg}`;
   try {
@@ -49,18 +43,6 @@ function log(msg) {
 }
 function today() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-}
-function token() {
-  try { return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim(); } catch { return ''; }
-}
-async function api(p, options = {}) {
-  const r = await fetch(`http://127.0.0.1:3100${p}`, {
-    ...options,
-    headers: { 'content-type': 'application/json', 'x-console-token': token() },
-    signal: AbortSignal.timeout(20000),
-  });
-  const text = await r.text();
-  try { return { status: r.status, body: JSON.parse(text) }; } catch { return { status: r.status, body: text }; }
 }
 function readState() {
   try { return JSON.parse(fs.readFileSync(MINE, 'utf8')); } catch { return {}; }

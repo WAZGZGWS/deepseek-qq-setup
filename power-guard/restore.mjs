@@ -7,23 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
-const MEMDIR = path.join(ROOT, 'chat-memory');
-const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
-
-function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
-  console.log(line);
-  try { fs.appendFileSync(path.join(STATE, 'restore.log'), line + '\n'); } catch {}
-}
-
-function token() {
-  return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim();
-}
+import { ROOT, STATE, stamp, chatKey, consoleToken as token } from '../lib/base.mjs';
 
 async function api(p, options = {}) {
   const r = await fetch(`http://127.0.0.1:3100${p}`, {
@@ -32,6 +16,15 @@ async function api(p, options = {}) {
     signal: AbortSignal.timeout(15000),
   });
   return r.json().catch(() => ({}));
+}
+
+const MEMDIR = path.join(ROOT, 'chat-memory');
+const KEY = chatKey();
+
+function log(...a) {
+  const line = `[${stamp()}] ${a.join(' ')}`;
+  console.log(line);
+  try { fs.appendFileSync(path.join(STATE, 'restore.log'), line + '\n'); } catch {}
 }
 
 async function waitBridge(seconds = 120) {

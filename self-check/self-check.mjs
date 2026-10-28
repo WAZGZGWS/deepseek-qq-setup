@@ -15,23 +15,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { ROOT, BRIDGE, STATE, stamp, today, chatKey, consoleToken as token } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
-const ARCHIVE = path.join(ROOT, 'archive', 'logs');
-const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
-const FIX = process.argv.includes('--fix');
-const STALE_MS = 90 * 1000;
-
-let problems = 0;
-const say = (ok, msg) => { console.log((ok ? '  [OK]   ' : '  [问题] ') + msg); if (!ok) problems++; };
-const fixed = (msg) => console.log('  [已修] ' + msg);
-
-function token() {
-  try { return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim(); } catch { return ''; }
-}
 async function api(pathname) {
   try {
     const r = await fetch(`http://127.0.0.1:3100${pathname}`, {
@@ -41,6 +26,15 @@ async function api(pathname) {
     return await r.json();
   } catch { return {}; }
 }
+
+const ARCHIVE = path.join(ROOT, 'archive', 'logs');
+const KEY = chatKey();
+const FIX = process.argv.includes('--fix');
+const STALE_MS = 90 * 1000;
+
+let problems = 0;
+const say = (ok, msg) => { console.log((ok ? '  [OK]   ' : '  [问题] ') + msg); if (!ok) problems++; };
+const fixed = (msg) => console.log('  [已修] ' + msg);
 
 // ── 1) API key：环境变量 vs 文件 ─────────────────────────────────
 function checkKey() {
@@ -215,7 +209,7 @@ function checkRoleBreak() {
   say(hits === 0, hits === 0 ? '没有主动提 AI 身份' : `发现 ${hits} 处，考虑加强角色卡`);
 }
 
-console.log(`=== self-check ${FIX ? '(--fix)' : ''} ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })} ===`);
+console.log(`=== self-check ${FIX ? '(--fix)' : ''} ${stamp()} ===`);
 checkKey();
 checkRestartLoop();
 await checkMemory();

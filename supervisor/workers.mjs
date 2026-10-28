@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { ROOT } from '../lib/base.mjs';
 
 /**
  * 后台工人名单 —— 全项目只此一份。
@@ -8,7 +9,6 @@ import path from 'node:path';
  * 于是 doctor 只数 7 个锁，eye-drop 死了也报「全部在跑」。
  * 名单放这里，两边 import，改一次就都改了。
  */
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
 
 export const WORKERS = [
   { name: 'cron', file: path.join(ROOT, 'cron', 'cron.mjs') },

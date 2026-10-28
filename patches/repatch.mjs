@@ -11,9 +11,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { ROOT } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const FILE = path.join(HERE, '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'src', 'bridge.js');
+const FILE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'src', 'bridge.js');
 const CHECK_ONLY = process.argv.includes('--check');
 
 let src = fs.readFileSync(FILE, 'utf8');

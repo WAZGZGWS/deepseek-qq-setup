@@ -13,14 +13,12 @@
  * 判活不能只看 pid —— Windows 会复用 pid。必须核对命令行里跑的是不是那个脚本。
  */
 import fs from 'node:fs';
-import net from 'node:net';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
+import { ROOT, BRIDGE, STATE, stamp, portOpen, dirOf } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
+const HERE = dirOf(import.meta.url);
+
 const CHECK_SEC = 10;
 
 // 单例锁（放本目录，state/ 的 ACL 收得比较紧）
@@ -34,19 +32,9 @@ try {
 try { fs.writeFileSync(LOCK, String(process.pid)); } catch {}
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   try { console.log(line); } catch {}
   try { fs.appendFileSync(path.join(HERE, 'stack-guard.log'), line + '\n'); } catch {}
-}
-
-function portOpen(port) {
-  return new Promise((resolve) => {
-    const s = net.connect({ host: '127.0.0.1', port });
-    const done = (v) => { try { s.destroy(); } catch {} resolve(v); };
-    s.setTimeout(1500, () => done(false));
-    s.once('connect', () => done(true));
-    s.once('error', () => done(false));
-  });
 }
 
 /** pid 活着、而且命令行里确实是这个脚本（防 pid 复用） */

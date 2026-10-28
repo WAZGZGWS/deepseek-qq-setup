@@ -13,9 +13,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { ROOT, stamp } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
 const ARCHIVE = path.join(ROOT, 'archive', 'logs');
 const OUT = path.join(ROOT, 'archive', 'summary');
 const MODEL = process.env.SUMMARY_MODEL || 'deepseek-chat';
@@ -26,7 +25,7 @@ function day(offset = 0) {
 }
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   console.log(line);
   try { fs.appendFileSync(path.join(ROOT, 'state', 'memory-summary.log'), line + '\n'); } catch {}
 }

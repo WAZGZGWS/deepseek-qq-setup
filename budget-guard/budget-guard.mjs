@@ -14,25 +14,13 @@ singleInstance('budget');
  * 环境变量：DAILY_BUDGET（默认 5）、CHECK_MIN（默认 30）
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { STATE, stamp, today, PRICE, ownerQQ, consoleApi as api } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
 // 主人的 QQ 号从桥接 config.json 里读 —— 下载的人不用手改这里
-function resolveOwner(bridgeDir) {
-  try {
-    const c = JSON.parse(fs.readFileSync(path.join(bridgeDir, 'config.json'), 'utf8'));
-    if (Number(c.ownerQQ)) return Number(c.ownerQQ);
-  } catch {}
-  return 0;
-}
-const OWNER = resolveOwner(BRIDGE);
+const OWNER = ownerQQ();
 const BUDGET = Number(process.env.DAILY_BUDGET || 5);
 const CHECK_MIN = Math.max(5, Number(process.env.CHECK_MIN || 30));
-const PRICE = { cacheHit: 0.2, cacheMiss: 2.0, output: 8.0 };
 
 const NORMAL_SILENCE = {
   enabled: true,
@@ -47,10 +35,8 @@ const BUDGET_SILENCE = {
   options: { stopWakes: true, recordMessages: true, pauseAiTasks: true, includeOwnerPrivate: false, catchUpOnEnd: false },
 };
 
-const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   console.log(line);
   try { fs.appendFileSync(path.join(STATE, 'budget.log'), line + '\n'); } catch {}
 }
@@ -70,19 +56,6 @@ function spendToday() {
     cost += ((b.cacheHit || 0) / 1e6) * PRICE.cacheHit + ((b.cacheMiss || 0) / 1e6) * PRICE.cacheMiss + ((b.output || 0) / 1e6) * PRICE.output;
   }
   return cost;
-}
-
-function token() {
-  return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim();
-}
-
-async function api(pathname, options = {}) {
-  const r = await fetch(`http://127.0.0.1:3100${pathname}`, {
-    ...options,
-    headers: { 'content-type': 'application/json', 'x-console-token': token() },
-    signal: AbortSignal.timeout(15000),
-  });
-  return { status: r.status, body: await r.text() };
 }
 
 async function notify(text) {

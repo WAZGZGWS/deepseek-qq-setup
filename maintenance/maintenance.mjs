@@ -12,13 +12,9 @@ import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 import path from 'node:path';
+import { ROOT, BRIDGE, STATE, stamp } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
 const BACKUPS = path.join(ROOT, 'backups');
-
 
 // 7z 加密打包（密码存在 state/backup-pass.txt，首次自动生成）
 const SEVEN_ZIP = process.env.SEVEN_ZIP || 'E:\\7-Zip\\7z.exe';
@@ -51,7 +47,7 @@ const KEEP_LOGS = 5;
 const KEEP_BACKUPS = 7;
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   // 必须落文件：supervisor 拉起时 stdio 是 ignore，只 console.log 等于什么都没留下，
   // 备份到底成没成功根本查不到（2026-10-28 实际踩到）
   try { console.log(line); } catch {}

@@ -336,6 +336,9 @@ npm init -y     # 如果你要用到 node_modules 里的东西
 | `cron` | 每 30 秒 | 调度上面这些定时任务 |
 | `notify` | 按需 | 外部告警出口 |
 
+公共的东西全在 `lib/base.mjs`：部署路径、日志时间戳、桥接控制台调用、DeepSeek 计价。
+脚本不再各抄一遍——以前 24 个文件抄同样的 4 行路径，改目录结构要改 24 处。
+
 ## 想改东西的时候，改哪儿
 
 | 想改什么 | 去哪改 | 怎么生效 |
@@ -737,6 +740,9 @@ archive/*
 能收的都收成一份了：后台工人名单现在只在 `supervisor/workers.mjs`，supervisor 和 stack-doctor 都 import 它，加人只改一处。
 （这条就是被 `eye-drop` 教会的：加完 supervisor 忘了改 doctor 那份，于是它死了也没人报。）
 
+同一类重复在 2026-10-28 又清了一次：**24 个脚本各抄一遍的「路径 4 行」、日志时间戳、`console-token`、取主人 QQ、DeepSeek 计价**，全收进 `lib/base.mjs`。
+当时抄得还不完全一样——时间戳有的带时区有的不带，日志里有两种日期格式。现在 `regression` 里有一条守着：谁再抄回去就报错。
+
 ## 目录结构
 
 ```
@@ -751,6 +757,7 @@ archive/*
 ├── donate/           打赏（放收款码的地方）
 ├── eye-drop/         按醒来时间排提醒
 ├── like-card/        名片点赞（0 token）
+├── lib/              公共件：路径 / 时间戳 / 控制台调用 / 计价，只有这一份
 ├── lock/             心跳单例锁
 ├── maintenance/      日志轮转 + 备份
 ├── memory-summary/   每日摘要

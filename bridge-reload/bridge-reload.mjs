@@ -11,20 +11,18 @@
  *      （兼容 2-启动桥接.bat 的 loop：那边 5 秒内会拉起来，这里看到端口通了就不抢）
  */
 import fs from 'node:fs';
-import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { BRIDGE, STATE, stamp, chatKey, portOpen, consoleToken as token, dirOf } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
-const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
+const HERE = dirOf(import.meta.url);
+
+const KEY = chatKey();
 const QUIET_MIN = Number(process.env.QUIET_MIN || 8);
 const GUARD_SEC = 5;
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   console.log(line);
   // state 目录 ACL 被桥接收紧，运维身份未必写得进去：优先写本目录
   for (const dir of [HERE, STATE]) {
@@ -41,20 +39,6 @@ try {
   }
 } catch {}
 try { fs.writeFileSync(LOCK, String(process.pid)); } catch {}
-
-function token() {
-  try { return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim(); } catch { return ''; }
-}
-
-function portOpen(port = 3100) {
-  return new Promise((resolve) => {
-    const s = net.connect({ host: '127.0.0.1', port });
-    const done = (v) => { try { s.destroy(); } catch {} resolve(v); };
-    s.setTimeout(1500, () => done(false));
-    s.once('connect', () => done(true));
-    s.once('error', () => done(false));
-  });
-}
 
 function lastActivityAt() {
   try {

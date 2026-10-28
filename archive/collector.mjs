@@ -13,23 +13,17 @@ singleInstance('archive');
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { STATE, stamp, today, chatKey, consoleToken as token, dirOf } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
+const HERE = dirOf(import.meta.url);
+
 const OUT = path.join(HERE, 'logs');
-const KEY = process.env.CHAT_KEY || 'private:YOUR_QQ';
+const KEY = chatKey();
 const INTERVAL = Math.max(30, Number(process.env.INTERVAL_SEC || 60)) * 1000;
 const CURSOR = path.join(STATE, 'archive-cursor.json');
 const KEEP_KEYS = 400;
 
-const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
 const hhmm = (t) => new Date(t).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }).slice(0, 5);
-
-function token() {
-  return fs.readFileSync(path.join(STATE, 'console-token'), 'utf8').trim();
-}
 
 function readCursor() {
   try { return JSON.parse(fs.readFileSync(CURSOR, 'utf8')); } catch { return {}; }
@@ -39,7 +33,7 @@ function writeCursor(v) {
 }
 
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   console.log(line);
   try { fs.appendFileSync(path.join(STATE, 'archive.log'), line + '\n'); } catch {}
 }

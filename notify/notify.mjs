@@ -10,11 +10,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { ROOT, STATE } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
 const CONF = path.join(ROOT, 'notify.json');
 
 const text = process.argv.slice(2).join(' ') || '(empty)';

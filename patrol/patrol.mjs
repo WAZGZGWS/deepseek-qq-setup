@@ -8,36 +8,20 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import net from 'node:net';
 import { execSync } from 'node:child_process';
 import { notify } from '../notify/notify.mjs';
+import { ROOT, STATE, stamp, today, portOpen } from '../lib/base.mjs';
 
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const ROOT = path.join(HERE, '..');
-const BRIDGE = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0');
-const STATE = path.join(BRIDGE, 'state');
 const REPORTS = path.join(ROOT, 'reports');
 const BALANCE_WARN = Number(process.env.BALANCE_WARN || 5);
 
-const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-
 function log(...a) {
-  const line = `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${a.join(' ')}`;
+  const line = `[${stamp()}] ${a.join(' ')}`;
   console.log(line);
   try {
     fs.mkdirSync(REPORTS, { recursive: true });
     fs.appendFileSync(path.join(REPORTS, `patrol-${today()}.log`), line + '\n');
   } catch {}
-}
-
-function portOpen(port) {
-  return new Promise((resolve) => {
-    const s = net.connect({ host: '127.0.0.1', port });
-    const done = (v) => { try { s.destroy(); } catch {} resolve(v); };
-    s.setTimeout(2000, () => done(false));
-    s.once('connect', () => done(true));
-    s.once('error', () => done(false));
-  });
 }
 
 async function balance() {

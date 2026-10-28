@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { STATE, dirOf } from '../lib/base.mjs';
 
 /**
  * 单实例锁：同名 worker 只允许一个实例。
@@ -20,7 +21,7 @@ const HEARTBEAT_MS = 20 * 1000;
 const STALE_MS = 90 * 1000;
 
 export function singleInstance(name, stateDir) {
-  const dir = stateDir || path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state');
+  const dir = stateDir || STATE;
   const file = path.join(dir, `${name}.lock`);
 
   // console.log 在无控制台启动时可能抛错，别让它把进程带走
@@ -79,8 +80,19 @@ export function singleInstance(name, stateDir) {
       const watched = [];
       const selfPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
       if (selfPath && fs.existsSync(selfPath)) watched.push(selfPath);
-      const sharedPath = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'single.mjs');
+      const sharedPath = path.join(dirOf(import.meta.url), 'single.mjs');
       if (fs.existsSync(sharedPath) && !watched.includes(sharedPath)) watched.push(sharedPath);
+
+      // 也要盯 lib/ 里的公共件：所有脚本都 import 它，改了不重启就会出现
+      // 一半进程用新代码、一半用旧代码 —— 这种 bug 最难查。
+      const libDir = path.join(path.dirname(sharedPath), '..', 'lib');
+      try {
+        for (const f of fs.readdirSync(libDir)) {
+          if (!f.endsWith('.mjs')) continue;
+          const p = path.join(libDir, f);
+          if (!watched.includes(p)) watched.push(p);
+        }
+      } catch {}
 
       if (watched.length) {
         const mt = new Map(watched.map((p) => [p, fs.statSync(p).mtimeMs]));
