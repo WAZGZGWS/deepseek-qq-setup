@@ -466,6 +466,72 @@ send_qzone_msg { content, ugc_right: 16, target_uins: ["主人的QQ"] }
 | 上手 | Docker 一把梭 | 要装四样东西，但装完不用管 |
 
 它不解决"怎么接上 QQ"——那件事别人做得更好。它解决"接上之后怎么不崩、不忘事、不偷偷烧钱"。
+## 维护这套东西时容易犯的错
+
+这类项目有个特殊之处：**同一份脚本存在两个地方**——你本机跑着的那一份，和 GitHub 上脱敏后的那一份。改了一边忘了另一边，就会出问题。
+
+### ① 改了一边忘了另一边
+
+真事：`context-guard` 的修复只写进了仓库，本机跑的还是老代码，两边差了两天没人发现。
+
+自带的检查工具：
+
+```powershell
+node tools/sync-check.mjs --live E:\qq-bot-stack --repo E:\qq-bot-stack-os --names "你的角色名,昵称"
+```
+
+它会把本机的真实值（安装路径、QQ 号、角色名）替换成仓库里的占位符，再逐字节比对：
+
+```
+内容不一致（需要双向同步）（2）
+  context-guard\context-guard.mjs
+  self-check\self-check.mjs
+只在仓库里有（本机缺）（7）
+  install.ps1  ...
+只在本机有（仓库缺）（30）
+  3-keep-awake-settings.ps1  ...
+```
+
+**看到不一致先想清楚哪边新**，再同步，别盲目覆盖。
+
+### ② 脱敏会把代码改坏
+
+把 `妹妹` 替换成 `<BOT_NAME>` 的时候，**代码里的文件名也会被替换**：
+
+```js
+const roleFile = path.join(BRIDGE, 'roles', '<BOT_NAME>.md');   // ← 文件根本不存在
+```
+
+所以：
+
+- 脱敏后**必须跑一遍测试**（`regression.mjs`、`self-check.mjs`），脱敏改坏的东西只有测试能抓到
+- 测试里不要写死人设文件名，改成自动发现（`roles/` 下第一个非 README 的 `.md`）
+- 提示语里的路径别用 `<STACK_ROOT>` 这种占位符，改成「安装目录里的 xxx」，否则用户看到会懵
+
+### ③ `.gitignore` 整目录排除会吞掉必需文件
+
+```
+archive/          ← 这样排除，里面的文件**无法**再开例外
+```
+
+`archive/collector.mjs` 就这么被吞了，仓库里一直缺档案收集器，新用户 clone 下来档案功能整个没有，而且**不报任何错**。
+
+要用目录内容匹配才能开例外：
+
+```
+archive/*
+!archive/collector.mjs
+```
+
+同一个坑在 `versions/` 上也犯了一次。
+
+**自查方法**：把 `cron` 和 `supervisor` 里引用的每个路径逐个 `Test-Path` 一遍。
+
+### ④ 只改一处 copy，忘了另一处 copy
+
+`2-启动桥接.bat`、`stack-doctor.cmd` 这类启动器，本机有一份、`install.ps1` 里还生成一份模板。改了一个另一个不改，新装的人拿到的是旧行为。
+
+改启动器时，两处一起看。
 ## 目录结构
 
 ```
