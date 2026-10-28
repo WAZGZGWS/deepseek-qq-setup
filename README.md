@@ -861,6 +861,7 @@ git push
 | 报错 | 原因 | 解法 |
 |---|---|---|
 | `schannel: next InitializeSecurityContext failed: CRYPT_E_NO_REVOCATION_CHECK (0x80092012)` | 网络里有代理/安全软件拦了 github.com，证书吊销列表拉不到 | `git config --global http.schannelCheckRevoke false`；还不行再加 `git config --global http.sslVerify false` |
+| `schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS` | 用受限权限/服务账户跑 git，schannel 拿不到系统证书库 | 换 OpenSSL 后端推：`git -c http.sslBackend=openssl -c http.sslVerify=false push` |
 | `Repository not found` | 仓库还没建，或者名字拼错 | 先在 GitHub 建**空仓库**，别勾 README / .gitignore / license |
 | `Permission to USER/REPO.git denied` / `403` | token 没有写权限 | 用 classic token，**必须勾 `repo`**；Fine-grained token 要把 `Contents` 设成 Read and write |
 | `fatal: 此平台上不支持操作` | Git Credential Manager 存不下凭据（便携版 git 常见） | `git config --local credential.helper ""` 然后 `git config --local --add credential.helper store`，改用 token 认证 |
