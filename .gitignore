@@ -21,8 +21,8 @@ archive/*
 !archive/collector.mjs
 chat-memory/
 backups/
-versions/
-
+versions/*
+!versions/versions.mjs
 # 密钥与凭证
 *credentials*
 *token*
