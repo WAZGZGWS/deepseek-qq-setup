@@ -1,4 +1,4 @@
-# 设置机器人 QQ 的密码（只存本地，DPAPI 加密）
+﻿# 设置机器人 QQ 的密码（只存本地，DPAPI 加密）
 #
 # 用途：QQ 掉线后不用手机扫码，直接 `node tools/qq-login.mjs password` 登回去。
 # 安全性：用 Windows DPAPI 按「当前用户」加密，只有这台电脑上的你这个账户能解开；

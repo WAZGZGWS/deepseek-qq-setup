@@ -205,6 +205,26 @@ check('免扫码登录工具在位', () => {
   if (/password\s*:\s*['"][^'"]+['"]/.test(t)) return '脚本里疑似写死了密码';
   return true;
 });
+check('带中文的 .ps1 必须有 UTF-8 BOM', () => {
+  // Windows PowerShell 5.1 读无 BOM 的 .ps1 会按 GBK 解，中文里的引号/花括号会被吃坏，
+  // 报「Missing closing '}'」之类莫名其妙的语法错（2026-10-28 真踩过）。
+  const bad = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === '.git' || e.name === 'node_modules') continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue; }
+      if (!p.endsWith('.ps1')) continue;
+      const buf = fs.readFileSync(p);
+      const hasBom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
+      const text = buf.toString('utf8');
+      const ascii = /^[\x00-\x7F]*$/.test(text);
+      if (!hasBom && !ascii) bad.push(path.relative(ROOT, p));
+    }
+  };
+  walk(ROOT);
+  return bad.length === 0 || `没有 BOM：${bad.join(', ')}（PowerShell 5.1 会按 GBK 读，中文会炸）`;
+});
 
 // ---- 输出 ----
 let failed = 0;
