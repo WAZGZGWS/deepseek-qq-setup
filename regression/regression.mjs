@@ -114,10 +114,26 @@ check('今天有聊天档案', () => fs.existsSync(archiveFile) || '尚未生成
 
 // ---- 端口 ----
 const p3000 = await portOpen(3000);
+
+// NapCat 是否"真"在响应：这版对不认识的请求会回
+// {"status":"ok","data":{},"message":"NapCat4 Is Running"} —— 只看 status 会被骗。
+let napcatReal = false;
+if (p3000) {
+  try {
+    const r = await fetch('http://127.0.0.1:3000/get_login_info', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = await r.json();
+    napcatReal = !!j?.data?.user_id && !String(j?.message || '').includes('NapCat4 Is Running');
+  } catch {}
+}
 const p3001 = await portOpen(3001);
 const p3100 = await portOpen(3100);
 check('NapCat 3000', () => p3000 || '未监听');
 check('NapCat 3001', () => p3001 || '未监听');
+check('NapCat 接口真在响应（不是假 ok）', () => napcatReal || '收到假 ok 或没返回 user_id');
+
 check('桥接控制台 3100', () => p3100 || '未监听');
 
 // ---- 新组件在位（2026-10-27/28 加的）----

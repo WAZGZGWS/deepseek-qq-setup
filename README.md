@@ -164,6 +164,11 @@ powershell -ExecutionPolicy Bypass -File install.ps1 -Reset
 call launcher.bat -q 123456789
 ```
 
+> **NapCat 的 HTTP 接口是路径式**：`POST /动作名`，参数直接当 body。
+> 不要写成 OneBot 文档里那种 `POST /` 带 `{action, params}` —— 这版 NapCat 会回一句
+> `{"status":"ok","data":{},"message":"NapCat4 Is Running"}`，**看起来成功，其实什么都没做**。
+> 不确定就用 `node tools/napcat-call.mjs get_login_info` 试一下。
+
 ### 2. 装 DSH + 桥接
 
 见 [dsh-qq-bridge](https://github.com/h-D-ACE/dsh-qq-bridge) 的说明。
@@ -278,6 +283,7 @@ worker 每 3 秒检查自己的脚本和 `single.mjs` 的 mtime，变了就 `exi
 | **日志只写了 console** | 被守护进程拉起时 `stdio=ignore`，出事了查不到任何记录 | 所有常驻/定时脚本的 log 必须落文件，不能只 `console.log` |
 | **Wi-Fi 网卡省电** | 每天固定时间掉线，掉了就得扫码 | 网卡"允许计算机关闭此设备"要在夜里断开连接。设 `PnPCapabilities=24` 关掉（见 `tools/`） |
 | **拿 0 当时间戳比大小** | 日志出现"29885746 分钟前收到过消息" | 桥接还没收到过消息时 `lastIncomingAt` 是 0，相减等于"从 1970 年到现在"。比之前先判非零 |
+| **NapCat 的接口是路径式，打 `/` 会拿到假 ok** | 说"已发布"，打开空间却什么都没有；日志里全是 `status: ok` | 正确写法是 `POST /动作名` + 参数当 body。写成 `POST /` 带 `{action,params}` 时，这版 NapCat 只回一句 `NapCat4 Is Running`，`data` 是空的——**动作根本没执行**。用 `tools/napcat-call.mjs` 验证 |
 
 ## 自检
 
