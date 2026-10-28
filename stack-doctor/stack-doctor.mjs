@@ -327,6 +327,7 @@ async function handle(state, name, up, restartFn, opts = {}) {
     }
     s.fails = 0;
     s.downSince = 0;
+    s.pausedUntil = 0;
     s.starts = s.starts.filter((t) => t > Date.now() - RETRY_WINDOW);
     return;
   }
@@ -336,11 +337,22 @@ async function handle(state, name, up, restartFn, opts = {}) {
   const downMin = Math.round((Date.now() - s.downSince) / 60000);
   log(`${label} 掉线 ${s.fails}/${FAIL_LIMIT}${opts.why ? `（${opts.why}）` : ''}，已 ${downMin} 分钟`);
 
+  // 等人工验证期间别重试：每两分钟撞一次只会让风控更紧
+  if (s.pausedUntil && Date.now() < s.pausedUntil) {
+    const leftMin = Math.round((s.pausedUntil - Date.now()) / 60000);
+    if (Date.now() - (s.lastPauseLogAt || 0) > 10 * 60 * 1000) {
+      log(`${label} 在等人工处理（还有约 ${leftMin} 分钟），这期间不自动重试`);
+      s.lastPauseLogAt = Date.now();
+    }
+    s.fails = 0;
+    return;
+  }
+
   if (s.fails < FAIL_LIMIT) return;
 
   s.starts = s.starts.filter((t) => t > Date.now() - RETRY_WINDOW);
   if (s.starts.length >= MAX_PER_HOUR) {
-    log(`${label} 最近 ${RETRY_WINDOW_H} 小时重启 ${s.starts.length} 次仍失败，停止重试（大概率需要人工扫码）`);
+    log(`${label} 最近 ${RETRY_WINDOW_H} 小时重启 ${s.starts.length} 次仍失败，停止重试（大概率需要人工验证）`);
     if (Date.now() - s.alertedAt > ALERT_COOLDOWN_MS) {
       const text = `${label} 反复掉线，${RETRY_WINDOW_H} 小时内自动重启试了 ${s.starts.length} 次都没成功。\n\n` + (opts.manualHint || '需要人工看一下。');
       try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}
@@ -387,8 +399,27 @@ async function main() {
         const last = String(out || '').trim().split('\n').filter(Boolean).pop() || '';
         if (last) log('密码登录：' + last.slice(0, 160));
       } catch (e) {
-        const msg = String((e.stdout || '') + (e.stderr || '') || e.message).trim().split('\n').pop();
+        const msg = String((e.stdout || '') + (e.stderr || '') || e.message).trim().split('\n').filter(Boolean).pop();
         log('密码登录失败：' + String(msg).slice(0, 160));
+
+        // 退出码 2 = 要短信/验证码，3 = 要新设备扫码。
+        // 这两种再重试只会让 QQ 风控更紧（今天就是这样从「能登」变成「要短信」的），
+        // 所以直接停手、等人来，别每两分钟撞一次。
+        if (e.status === 2 || e.status === 3) {
+          const waitH = Number(process.env.HUMAN_WAIT_H || 2);
+          s.pausedUntil = Date.now() + waitH * 3600 * 1000;
+          const text = e.status === 2
+            ? 'QQ 登录需要短信/验证码验证，自动重试已暂停。\n\n打开 NapCat WebUI（http://127.0.0.1:6099）完成验证，或用手机登录这个号后扫码。'
+            : 'QQ 把这次登录判成「新设备」，需要扫码验证，自动重试已暂停。\n\n用登录着这个号的手机扫码（NapCat WebUI 里有二维码）。';
+          if (Date.now() - s.alertedAt > ALERT_COOLDOWN_MS) {
+            try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}
+            desktopAlert(text);
+            s.alertedAt = Date.now();
+            s.alertedBy = 'QQ（NapCat）';
+          }
+          log(`停机等人处理，${waitH} 小时内不再自动尝试`);
+          return false;
+        }
       }
       await sleep(12000);
       if ((await probeNapcat()).ok) return true;
@@ -403,7 +434,7 @@ async function main() {
     label: 'QQ（NapCat）',
     why: nc.why,
     manualHint: fs.existsSync(path.join(ROOT, 'qq-password.dat'))
-      ? '密码登录也失败了：可能需要人工确认（验证码/新设备），打开 NapCat WebUI 或双击「测试快速登录.bat」'
+      ? '密码登录也没成功：多半是 QQ 要短信/验证码或判了新设备（看 state/stack-doctor.log 里「密码登录」那行）。\n打开 NapCat WebUI（http://127.0.0.1:6099）按提示验证，验证完跑一次 node tools/qq-login.mjs password。'
       : '需要手动扫码：双击安装目录里的「测试快速登录.bat」；想免扫码就双击 tools\\set-qq-password.cmd 设一次密码',
   });
 

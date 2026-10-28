@@ -141,21 +141,27 @@ async function passwordLogin() {
   const md5 = crypto.createHash('md5').update(readPassword()).digest('hex');
   const cred = await auth();
   const res = await call(cred, '/PasswordLogin', { uin, passwordMd5: md5 });
+
+  // 注意顺序：QQ 要验证时也返回 code=0，只是 data 里带 needCaptcha/needNewDevice。
+  // 先判 code 会把它当成「已发送」，看门狗就会一直重试 —— 越试风控越紧（2026-10-28 踩过）。
+  if (res?.data?.needCaptcha) {
+    console.log('需要人工验证（短信/验证码）：' + (res.data.proofWaterUrl || ''));
+    console.log('打开上面的链接，用绑定手机收验证码完成验证；验证完再跑一次 password');
+    process.exitCode = 2;
+    return false;
+  }
+  if (res?.data?.needNewDevice) {
+    console.log('QQ 判定为「新设备」，需要扫码验证：' + (res.data.jumpUrl || ''));
+    console.log('这一步只能人工：用登录着这个号的手机扫码（或先完成设备验证）');
+    process.exitCode = 3;
+    return false;
+  }
   if (res?.code === 0) {
     console.log(`密码登录请求已发送（${uin}），等 5~20 秒看 3000 端口/日志`);
     return true;
   }
-  if (res?.data?.needCaptcha) {
-    console.log('需要安全验证（滑块/验证码）：', res.data.proofWaterUrl || '');
-    console.log('这一步只能人工过：打开 NapCat WebUI → 密码登录 → 按提示验证');
-    return false;
-  }
-  if (res?.data?.needNewDevice) {
-    console.log('QQ 判定为「新设备」，需要扫码验证：', res.data.jumpUrl || '');
-    console.log('打开 NapCat WebUI 按提示处理，或 tools/qq-login.mjs qr 拿二维码');
-    return false;
-  }
   console.log('登录失败：', res?.message || JSON.stringify(res).slice(0, 200));
+  process.exitCode = 1;
   return false;
 }
 

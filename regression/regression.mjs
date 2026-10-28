@@ -242,6 +242,16 @@ check('告警文件在恢复后会撤掉', () => {
   const ok = /alertedBy/.test(s) && /unlinkSync\(ALERT_FILE\)/.test(s);
   return ok || 'stack-doctor 恢复时没有清 ALERT-stack.txt';
 });
+check('要短信验证时不再反复撞', () => {
+  // 2026-10-28：QQ 要短信验证后，看门狗每 2 分钟重试一次，风控越撞越紧。
+  const login = fs.readFileSync(path.join(ROOT, 'tools', 'qq-login.mjs'), 'utf8');
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  const bad = [];
+  if (!/needCaptcha/.test(login) || !/exitCode = 2/.test(login)) bad.push('qq-login 没把「要验证」单独暴露出来');
+  if (!/e\.status === 2/.test(doc)) bad.push('stack-doctor 没识别「要验证」的退出码');
+  if (!/pausedUntil/.test(doc)) bad.push('stack-doctor 没有暂停重试的机制');
+  return bad.length === 0 || bad.join('；');
+});
 
 // ---- 输出 ----
 let failed = 0;
