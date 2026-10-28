@@ -30,8 +30,18 @@ export function singleInstance(name, stateDir) {
     try { return Date.now() - fs.statSync(file).mtimeMs < STALE_MS; } catch { return false; }
   };
 
-  // 锁还在心跳期内 → 说明真有实例在跑，让位
-  if (isFresh()) {
+  // 锁文件里存的是持有者的 pid。心跳新鲜但进程已经没了（被强杀、崩溃、断电后重启），
+  // 说明这是个"还没过期但已经没人"的锁 —— 这种要立刻接管，不能干等 90 秒。
+  // 2026-10-28 实际遇到：上一代 worker 的锁还新鲜，新一代 supervisor 只能干等 5 分钟。
+  const pidAlive = () => {
+    let pid = 0;
+    try { pid = Number(fs.readFileSync(file, 'utf8').trim()); } catch { return false; }
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+  };
+
+  // 锁还在心跳期内、且持有者真的活着 → 让位
+  if (isFresh() && pidAlive()) {
     say(`[lock] ${name} 已有实例在跑（锁 ${Math.round((Date.now() - fs.statSync(file).mtimeMs) / 1000)}s 前刷新），本进程退出`);
     // 退出码 3 = "已经有人在跑，不是崩溃"。supervisor 看到 3 不会再拉，
     // 否则会形成「每 5 秒起一个注定失败的克隆」的死循环（2026-10-28 实际发生过）。
