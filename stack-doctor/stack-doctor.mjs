@@ -370,7 +370,7 @@ async function handle(state, name, up, restartFn, opts = {}) {
   }
 
   log(`${label} 尝试重启…`);
-  if (await restartFn()) {
+  if (await restartFn(s)) {
     s.lastStart = Date.now();
     s.starts.push(Date.now());
     log(`${label} 已拉起（近 ${RETRY_WINDOW_H} 小时第 ${s.starts.length} 次）`);
@@ -383,7 +383,7 @@ async function main() {
 
   // 1. NapCat
   const nc = await probeNapcat();
-  await handle(state, 'napcat', nc.ok, async () => {
+  await handle(state, 'napcat', nc.ok, async (st) => {
     // 设过密码的话，先走「密码登录」：不弹二维码、不用碰手机
     // （只在 NapCat 进程活着、WebUI 能连上时才有意义）
     const pwdFile = path.join(ROOT, 'qq-password.dat');
@@ -407,15 +407,15 @@ async function main() {
         // 所以直接停手、等人来，别每两分钟撞一次。
         if (e.status === 2 || e.status === 3) {
           const waitH = Number(process.env.HUMAN_WAIT_H || 2);
-          s.pausedUntil = Date.now() + waitH * 3600 * 1000;
+          st.pausedUntil = Date.now() + waitH * 3600 * 1000;
           const text = e.status === 2
             ? 'QQ 登录需要短信/验证码验证，自动重试已暂停。\n\n打开 NapCat WebUI（http://127.0.0.1:6099）完成验证，或用手机登录这个号后扫码。'
             : 'QQ 把这次登录判成「新设备」，需要扫码验证，自动重试已暂停。\n\n用登录着这个号的手机扫码（NapCat WebUI 里有二维码）。';
-          if (Date.now() - s.alertedAt > ALERT_COOLDOWN_MS) {
+          if (Date.now() - st.alertedAt > ALERT_COOLDOWN_MS) {
             try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}
             desktopAlert(text);
-            s.alertedAt = Date.now();
-            s.alertedBy = 'QQ（NapCat）';
+            st.alertedAt = Date.now();
+            st.alertedBy = 'QQ（NapCat）';
           }
           log(`停机等人处理，${waitH} 小时内不再自动尝试`);
           return false;
