@@ -434,6 +434,7 @@ npm init -y     # 如果你要用到 node_modules 里的东西
 | **计划任务返回 -1073741510** | NapCat 自启失败（控制台被关） | 只能手动点 UAC |
 | **`.bat` 里写中文注释** | 脚本"闪一下就没了"，cmd 报语法错误 | `.bat` 全用 ASCII，中文放到 `.ps1`（UTF-8 带 BOM） |
 | **`.ps1` 存成 UTF-8 无 BOM** | 报 `Missing closing '}'` 之类莫名其妙的语法错——PowerShell 5.1 按 GBK 读，中文把引号/花括号吃坏了 | `.ps1` 一律 UTF-8 **带 BOM**；`regression` 里有一条守着 |
+| **同时开两个 QQ 实例** | 同一个号在两个实例里互踢：刚登上就被 `KickedOffLine`，一天掉七八次 | 拉起 NapCat 前先 `tasklist` 看 QQ 是否已在跑；`stack-doctor` / `napcat-watchdog` 都加了这道闸 |
 | **提权进程写不进桥接的 state 目录** | 守护脚本说"已拉起"，`3100` 却永远是空的（桥接在 `bridge.lock` 上 `EPERM` 退出） | 那个目录带 Low 完整性标签。用 `explorer.exe <脚本>` 代开，权限退回普通用户就写得进去了 |
 | **进程活着、端口在听、消息不处理** | 你发消息她一个字不回，端口和进程检查全部正常 | 对账：NapCat 日志里"收到私聊"的时间 vs 桥接记录的 `lastIncomingAt`，差 5 分钟以上就重启桥接 |
 | **余额提醒半夜发消息** | 凌晨被"钱快没了"吵醒 | 提醒是脚本直连 NapCat 发的，绕过了桥接静默。脚本里要自己判断静默时段 |

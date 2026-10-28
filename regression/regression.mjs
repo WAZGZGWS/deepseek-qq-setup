@@ -252,6 +252,12 @@ check('要短信验证时不再反复撞', () => {
   if (!/pausedUntil/.test(doc)) bad.push('stack-doctor 没有暂停重试的机制');
   return bad.length === 0 || bad.join('；');
 });
+check('不会同时开两个 QQ 实例', () => {
+  // 两个实例用同一个号会互相顶号，表现是「刚登上就被踢」（2026-10-28 晚上撞到两次）。
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  const ok = /function qqRunning\(/.test(doc) && /不再开第二个/.test(doc);
+  return ok || 'stack-doctor 拉起 NapCat 前没检查 QQ 是否已经在跑';
+});
 
 // ---- 输出 ----
 let failed = 0;

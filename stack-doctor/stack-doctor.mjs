@@ -64,6 +64,26 @@ const WEBUI_PORT = (() => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * QQ 进程是不是已经在跑。
+ *
+ * 为什么要这个：NapCat 登录要几十秒，这段时间 3000 还没起来，
+ * 看门狗会以为「没在跑」又去拉一个 —— 结果两个实例用同一个号互相顶号，
+ * 表现就是「她老是掉线、刚登上就被踢」（2026-10-28 晚上实际撞到两次）。
+ */
+function qqRunning() {
+  try {
+    const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/NH'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5000,
+    });
+    return /QQ\.exe/i.test(out);
+  } catch {
+    return false;
+  }
+}
+
 function stamp() {
   return new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
 }
@@ -427,6 +447,12 @@ async function main() {
 
     if (!fs.existsSync(BOOT_BAT)) {
       log('找不到 ' + BOOT_BAT);
+      return false;
+    }
+    // QQ 已经在跑就别再开一个：登录要几十秒，这期间 3000 是空的，
+    // 再拉一个实例只会跟它抢同一个号（互踢）。
+    if (qqRunning()) {
+      log('QQ 进程已经在跑（可能正在登录），不再开第二个，等下一轮');
       return false;
     }
     return spawnDetached('cmd.exe', ['/c', `"${BOOT_BAT}" -y`], { cwd: path.dirname(BOOT_BAT), windowsHide: false });
