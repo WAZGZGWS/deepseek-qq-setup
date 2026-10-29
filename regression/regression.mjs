@@ -199,6 +199,17 @@ check('滴眼药水改为按醒来时间排（固定任务应已停用）', () =
   return fixed.length === 0 || `还有 ${fixed.length} 条固定任务开着（会和 eye-drop 重复提醒）`;
 });
 
+// ---- 计划任务不许弹黑框（2026-10-29：每 2 分钟的体检任务在屏幕上闪一下）----
+check('隐藏启动器在位（run-hidden.vbs）', () => fs.existsSync(path.join(ROOT, 'run-hidden.vbs')) || '缺 run-hidden.vbs，计划任务只能退回 cmd（会闪黑框）');
+check('计划任务用静默启动', () => {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    "(Get-ScheduledTask -TaskName 'QQStackDoctor' -ErrorAction SilentlyContinue).Actions | ForEach-Object { \"$($_.Execute) $($_.Arguments)\" }",
+  ], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  const line = String(r.stdout || '').trim();
+  if (!line) return true; // 没注册（比如非管理员装的）不算这次的错
+  return line.includes('run-hidden.vbs') || `动作还是「${line}」——每 2 分钟会闪一个 cmd 黑框`;
+});
+
 // ---- 公共件不许再被抄回去（2026-10-28 收过一次重复）----
 check('公共件存在（lib/base.mjs）', () => fs.existsSync(path.join(ROOT, 'lib', 'base.mjs')));
 check('没有脚本再抄一份路径样板', () => {

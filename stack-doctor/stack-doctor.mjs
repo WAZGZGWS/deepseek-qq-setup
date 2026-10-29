@@ -398,8 +398,68 @@ async function handle(state, name, up, restartFn, opts = {}) {
   s.fails = 0;
 }
 
+/**
+ * 让「一闪而过的黑框」消失。
+ *
+ * 计划任务的动作用 cmd.exe 直接跑 .cmd/.bat 时，Task Scheduler 会真的建一个
+ * 控制台窗口 —— 脚本跑多久它亮多久。2026-10-29 抓到实锤：每 2 分钟的
+ * QQStackDoctor 在 09:53:06 弹出一个可见 cmd 窗口（父进程 svchost = 计划任务服务）。
+ *
+ * 改法：动作换成 `wscript.exe run-hidden.vbs <脚本>`，窗口样式 0 = 完全不显示。
+ * 改任务要管理员，而本脚本自己就是计划任务里以 Highest 权限在跑 —— 顺手把
+ * 自家和同批任务（巡检/日报/维护）一起换掉；没提权就静默跳过。
+ * 6 小时查一次就够，别每 2 分钟都去问一遍计划任务。
+ */
+function ensureSilentTasks(state) {
+  const VBS = path.join(ROOT, 'run-hidden.vbs');
+  if (!fs.existsSync(VBS)) return;
+  if (Date.now() - (state.__silentTaskAt || 0) < 6 * HOUR) return;
+  try {
+    execFileSync('net', ['session'], { stdio: 'ignore', windowsHide: true, timeout: 10000 });
+  } catch {
+    return; // 没提权：改不动 Highest 任务，等下次
+  }
+  state.__silentTaskAt = Date.now();
+
+  const ps = [
+    "$vbs = $env:QQ_VBS; $root = $env:QQ_ROOT",
+    "$map = [ordered]@{ 'QQStackDoctor' = 'stack-doctor.cmd'; 'PatrolAt0900' = '16-patrol.bat'; 'PatrolAt2100' = '16-patrol.bat'; 'DailyReportAt2300' = '10-daily-report.bat'; 'MaintenanceDailyAt0400' = '13-maintenance.bat' }",
+    "foreach ($n in $map.Keys) {",
+    "  $t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue; if (-not $t) { continue }",
+    "  $cur = ($t.Actions | ForEach-Object { \"$($_.Execute) $($_.Arguments)\" }) -join ';'",
+    "  if ($cur -match 'run-hidden\\.vbs') { continue }",
+    "  $target = Join-Path $root $map[$n]; if (-not (Test-Path $target)) { continue }",
+    "  $arg = '\"' + $vbs + '\" \"' + $target + '\"'",
+    "  try {",
+    "    $a = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument $arg -ErrorAction Stop",
+    "    Set-ScheduledTask -TaskName $n -Action $a -ErrorAction Stop | Out-Null",
+    "    $back = ((Get-ScheduledTask -TaskName $n).Actions | ForEach-Object { \"$($_.Execute) $($_.Arguments)\" }) -join ';'",
+    "    if ($back -match 'run-hidden\\.vbs') { \"OK $n\" } else { \"FAIL $n\" }",
+    "  } catch { \"ERR $n $($_.Exception.Message)\" }",
+    "}",
+  ].join('\n');
+
+  try {
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 60000,
+      env: { ...process.env, QQ_VBS: VBS, QQ_ROOT: ROOT },
+    });
+    for (const line of String(out || '').split('\n').map((s) => s.trim()).filter(Boolean)) {
+      if (line.startsWith('OK ')) log(`计划任务 ${line.slice(3)} 改成静默启动（不再闪黑框）`);
+      else log(`计划任务静默化没成功：${line}`);
+    }
+  } catch (e) {
+    log('计划任务静默化出错：' + String(e.message || e).slice(0, 140));
+  }
+}
+
 async function main() {
   const state = loadState();
+
+  // 0. 先把「闪黑框」的计划任务改成静默（提权时才做，见函数注释）
+  ensureSilentTasks(state);
 
   // 1. NapCat
   const nc = await probeNapcat();

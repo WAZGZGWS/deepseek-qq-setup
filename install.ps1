@@ -394,6 +394,29 @@ exit /b 0
 if ($DryRun) { Say '  [plan] stack-doctor.cmd' 'DarkGray' }
 else { [IO.File]::WriteAllText((Join-Path $TargetDir 'stack-doctor.cmd'), $sdCmd, $ASCII); Say '  [OK] stack-doctor.cmd' 'Green' }
 
+# run-hidden.vbs：给计划任务用的隐藏启动器。
+# 计划任务直接 cmd /c 跑 .cmd 会真弹一个控制台窗口（2026-10-29 抓到过：每 2 分钟闪一下），
+# 用 wscript + 窗口样式 0 跑就完全不显示。纯 ASCII，免得编码又出岔子。
+# 里面必须用 cmd /c 包一层：直接 Shell.Run 那个 .cmd 会走 ShellExecute，
+# Windows 会弹「打开文件 - 安全警告」，对话框一挂任务就卡住（比闪屏更糟）。
+$hiddenVbs = @'
+' run-hidden.vbs -- run a console program with no visible window (for scheduled tasks)
+' usage: wscript.exe run-hidden.vbs "E:\path\thing.cmd" [args...]
+If WScript.Arguments.Count = 0 Then WScript.Quit 64
+
+Dim cmd, i, target
+target = WScript.Arguments(0)
+cmd = "cmd /c """ & target & """"
+For i = 1 To WScript.Arguments.Count - 1
+  cmd = cmd & " """ & WScript.Arguments(i) & """"
+Next
+
+' 0 = hidden window, False = don't wait for it to finish
+CreateObject("WScript.Shell").Run cmd, 0, False
+'@
+if ($DryRun) { Say '  [plan] run-hidden.vbs' 'DarkGray' }
+else { [IO.File]::WriteAllText((Join-Path $TargetDir 'run-hidden.vbs'), $hiddenVbs, $ASCII); Say '  [OK] run-hidden.vbs（计划任务静默启动用）' 'Green' }
+
 # ── 8. 计划任务 ─────────────────────────────────────────────────
 Head '⑦ 注册全栈体检（每 2 分钟自愈）'
 if (-not $isAdmin) {
@@ -405,7 +428,12 @@ if (-not $isAdmin) {
     $taskName = 'QQStackDoctor'
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     try {
-        $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$TargetDir\stack-doctor.cmd`"" -WorkingDirectory $TargetDir
+        # 有 run-hidden.vbs 就用它（不闪黑框），没有才退回 cmd
+        if (Test-Path (Join-Path $TargetDir 'run-hidden.vbs')) {
+            $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$TargetDir\run-hidden.vbs`" `"$TargetDir\stack-doctor.cmd`"" -WorkingDirectory $TargetDir
+        } else {
+            $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$TargetDir\stack-doctor.cmd`"" -WorkingDirectory $TargetDir
+        }
         $logon = New-ScheduledTaskTrigger -AtLogOn
         $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
             -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)
