@@ -34,6 +34,9 @@ const JOBS = [
   { id: 'maintenance', at: '04:00', file: path.join(ROOT, 'maintenance', 'maintenance.mjs') },
   { id: 'like-card', at: '09:30', file: path.join(ROOT, 'like-card', 'like-card.mjs') },
   { id: 'patrol-morning', at: '09:00', file: path.join(ROOT, 'patrol', 'patrol.mjs') },
+  // 午后两张健康快照：这四天都是下午失联，晚上回来才知道，还分不清是睡了还是被踢。
+  { id: 'snap-lunch', at: '12:50', file: path.join(ROOT, 'tools', 'health-snapshot.mjs') },
+  { id: 'snap-afternoon', at: '17:30', file: path.join(ROOT, 'tools', 'health-snapshot.mjs') },
   { id: 'patrol-evening', at: '21:00', file: path.join(ROOT, 'patrol', 'patrol.mjs') },
   { id: 'self-check', at: '21:20', file: path.join(ROOT, 'self-check', 'self-check.mjs'), args: ['--fix'] },
   { id: 'memory-tidy', at: '22:20', file: path.join(ROOT, 'memory-tidy', 'memory-tidy.mjs') },

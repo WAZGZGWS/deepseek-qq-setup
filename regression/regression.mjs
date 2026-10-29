@@ -304,6 +304,12 @@ check('余额告警在回升后会撤掉', () => {
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
   return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
 });
+check('午后有健康快照（失联当天能定位）', () => {
+  // 2026-10-29：这四天下午失联，晚上回来只剩「猜」——是机器睡了还是被 QQ 踢了？
+  const c = fs.readFileSync(path.join(ROOT, 'cron', 'cron.mjs'), 'utf8');
+  const ok = /snap-lunch/.test(c) && /snap-afternoon/.test(c) && fs.existsSync(path.join(ROOT, 'tools', 'health-snapshot.mjs'));
+  return ok || '没有午后快照：下午失联只能事后猜';
+});
 check('掉线先试快速登录（不触发短信）', () => {
   // 2026-10-29：下午被踢后密码登录几乎必然要短信，人不在就整下午失联。
   // 本机 ticket 有时还有效，先试它一次成本极低，成了她就自己回来了。
