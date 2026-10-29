@@ -36,7 +36,10 @@ const FIX = process.argv.includes('--fix');
 const STALE_MS = 90 * 1000;
 
 let problems = 0;
+let warnings = 0;
 const say = (ok, msg) => { console.log((ok ? '  [OK]   ' : '  [问题] ') + msg); if (!ok) problems++; };
+/** 只提示、不算失败：这类问题要人看趋势，但不该让 exit code 变红（免得住每晚巡检都报红） */
+const warn = (ok, msg) => { console.log((ok ? '  [OK]   ' : '  [注意] ') + msg); if (!ok) warnings++; };
 const fixed = (msg) => console.log('  [已修] ' + msg);
 
 // ── 1) API key：环境变量 vs 文件 ─────────────────────────────────
@@ -326,13 +329,54 @@ function checkPower() {
   say(standby === 0, standby ? `最近 24 小时进过 ${standby} 次 Modern Standby（每次都可能断网掉线）` : '最近 24 小时没进过 Modern Standby');
 }
 
+/**
+ * 档案覆盖率：一天里有没有超过 3 小时的空档。
+ *
+ * 2026-10-29 复盘时才发现：10-26/27/28 三天的档案里，中午到晚上各缺了约 9.5 小时
+ * （她掉线/被踢），而 self-check 一直在说"全部正常" —— 因为它只查档案"存不存在"、
+ * "两方都有没有"，不查"覆盖全不全"。等她真的需要翻旧账，才发现那段根本没有。
+ * 这里只看白天 6:00~24:00，空档 ≥180 分钟就提示（[注意]，不算失败）。
+ */
+function checkArchiveCoverage() {
+  console.log('\n=== 档案覆盖 ===');
+  const day = today();
+  const file = path.join(ARCHIVE, `${day}.md`);
+  if (!fs.existsSync(file)) { warn(false, `今天还没有档案文件（${day}.md）`); return; }
+  const mins = [];
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    const m = /^- (\d{2}):(\d{2})/.exec(line);
+    if (m) mins.push(Number(m[1]) * 60 + Number(m[2]));
+  }
+  if (!mins.length) { warn(false, '今天的档案里一条消息都没有'); return; }
+  mins.sort((a, b) => a - b);
+  const hhmm = (v) => `${String(Math.floor(v / 60)).padStart(2, '0')}:${String(v % 60).padStart(2, '0')}`;
+
+  const gaps = [];
+  for (let i = 1; i < mins.length; i++) {
+    const d = mins[i] - mins[i - 1];
+    if (d >= 180) gaps.push(`${hhmm(mins[i - 1])}→${hhmm(mins[i])}（${Math.round(d / 60)} 小时）`);
+  }
+  // 末尾：最后一条消息到现在（还没到 24 点）
+  const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false });
+  const nowMin = Number(nowHm.slice(0, 2)) * 60 + Number(nowHm.slice(3, 5));
+  const tail = nowMin - mins[mins.length - 1];
+  if (tail >= 180) gaps.push(`${hhmm(mins[mins.length - 1])}→现在（${Math.round(tail / 60)} 小时）`);
+
+  warn(gaps.length === 0, gaps.length
+    ? `今天有 ${gaps.length} 段超过 3 小时没有记录：${gaps.slice(0, 3).join('，')}`
+    : `今天每段间隔都 < 3 小时（最后一条 ${hhmm(mins[mins.length - 1])}）`);
+}
+
 console.log(`=== self-check ${FIX ? '(--fix)' : ''} ${stamp()} ===`);
 checkKey();
 checkRestartLoop();
 checkPower();
 await checkMemory();
 await checkArchiveBothSides();
+checkArchiveCoverage();
 checkRoleBreak();
 
-console.log('\n' + (problems === 0 ? '全部正常' : `发现 ${problems} 个问题`));
+console.log('\n' + (problems === 0
+  ? (warnings === 0 ? '全部正常' : `没有失败项，但有 ${warnings} 条要留意`)
+  : `发现 ${problems} 个问题`));
 process.exit(problems === 0 ? 0 : 1);

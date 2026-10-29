@@ -304,6 +304,13 @@ check('余额告警在回升后会撤掉', () => {
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
   return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
 });
+check('自检会看档案空档（不是只看文件在不在）', () => {
+  // 2026-10-29 复盘：10-26/27/28 档案各缺 ~9.5 小时，self-check 却一直"全部正常"，
+  // 因为它只查文件存在/双方都有话，不查覆盖。现在加一条按空档 >=3 小时提示。
+  const s = fs.readFileSync(path.join(ROOT, 'self-check', 'self-check.mjs'), 'utf8');
+  const ok = /function checkArchiveCoverage/.test(s) && /checkArchiveCoverage\(\)/.test(s) && /超过 3 小时没有记录/.test(s);
+  return ok || 'self-check 没有档案覆盖率检查（空档会被漏掉）';
+});
 check('归档器能从 QQ 历史补数据（桥接重启不至于断档）', () => {
   // 2026-10-29：桥接 21:38 重启后 /api/socialV2/recent 直接返回 0 条，档案从 09:44 起停更一整天。
   // QQ 自己的历史是持久的，归档器必须有这条兜底 + --rebuild 重建能力。
