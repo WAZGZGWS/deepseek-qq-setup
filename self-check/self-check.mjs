@@ -17,7 +17,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { ROOT, BRIDGE, STATE, stamp, today, chatKey, consoleToken as token } from '../lib/base.mjs';
-import { memoryChars, scanMemory } from '../lib/memory-rules.mjs';
+import { DEBT_MAX_CHARS, debtParse, isDebt, memoryChars, scanMemory } from '../lib/memory-rules.mjs';
 import { WORKER_NAMES } from '../supervisor/workers.mjs';
 
 async function api(pathname) {
@@ -143,6 +143,27 @@ async function checkMemory() {
   const budget = Number(process.env.MEMORY_BUDGET_CHARS || 5500);
   say(chars <= budget, `记忆体积 ${chars} 字（预算 ${budget}）`);
 
+  // ── 欠账本：格式能拆、不超 60 字、不吃普通事实的预算 ──────────────
+  // 2026-10-29 起因：鸭腿债被摘要压成一坨（「十根…两只…打五折」），谁也说不清欠多少。
+  // 现在欠账走固定格式，这里盯三件事：还能不能拆、会不会超长被桥接截断、有没有超账本预算。
+  const factTexts = (memRaw.facts || [])
+    .map((f) => (typeof f === 'string' ? f : f && f.text))
+    .filter(Boolean)
+    .map(String);
+  const debts = factTexts.filter((t) => isDebt(t));
+  const badDebts = debts.filter((t) => !debtParse(t) || t.length > DEBT_MAX_CHARS);
+  say(
+    badDebts.length === 0,
+    badDebts.length
+      ? `有 ${badDebts.length} 条欠账格式坏了（缺日期或超 ${DEBT_MAX_CHARS} 字，将来对不了账）：${badDebts.slice(0, 2).join('；')}`
+      : `欠账 ${debts.length} 条，格式都能对账`,
+  );
+  const debtChars = debts.reduce((a, s) => a + s.length, 0);
+  const debtBudget = Number(process.env.DEBT_BUDGET_CHARS || 600);
+  say(debtChars <= debtBudget, `账本 ${debtChars} 字（预算 ${debtBudget}）`);
+  say(!junk.some((j) => j.cat === 'fact' && isDebt(j.text)), '欠账没有被当成垃圾条目');
+  say(!debts.length || mem.includes('【欠账'), '提示词里包含【欠账】段（唤醒时能翻账）');
+
   try {
     const st = JSON.parse(fs.readFileSync(path.join(STATE, 'memory-stats.json'), 'utf8'));
     const prev = Number(st.facts || 0);
@@ -151,6 +172,9 @@ async function checkMemory() {
     const dropped = prev - now;
     say(prev === 0 || dropped <= Math.max(2, Math.floor(prev * 0.3)), `长期事实 ${prev} → ${now}（没异常暴跌）`);
     say(st.chars === undefined || Number(st.chars) <= budget * 1.5, `上次整理记录 ${st.facts} 条 / ${st.chars ?? '?'} 字`);
+    // 账本不能成批消失：结清一笔是正常的，一次少三笔以上多半是写丢了
+    const prevDebts = Number(st.debts || 0);
+    say(prevDebts === 0 || prevDebts - debts.length <= 2, `账本 ${prevDebts} → ${debts.length} 笔（没成批消失）`);
   } catch {
     // 还没有记录（新部署），不算问题
   }

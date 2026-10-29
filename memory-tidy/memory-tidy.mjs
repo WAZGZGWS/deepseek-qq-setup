@@ -23,10 +23,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, STATE, stamp, chatKey, consoleApi as api } from '../lib/base.mjs';
-import { cutText, importance, junkReason, memoryChars, norm, overlap, scanMemory, similar } from '../lib/memory-rules.mjs';
+import { DEBT_MAX_CHARS, cutText, debtParse, fitDebt, importance, isDebt, junkReason, memoryChars, norm, overlap, scanMemory, similar } from '../lib/memory-rules.mjs';
 
 const KEY = chatKey();
-const DRY = process.argv.includes('--dry') || process.env.DRY_RUN === '1';
+const SELFTEST = process.argv.includes('--selftest');
+const DRY = process.argv.includes('--dry') || SELFTEST || process.env.DRY_RUN === '1';
 const CHECK_ONLY = process.argv.includes('--check');
 
 const MAX_TRAITS = Number(process.env.MAX_TRAITS || 10);
@@ -244,12 +245,18 @@ async function tidy(mem) {
   removed.push(...thoughtsClean.removed);
   const thoughts = thoughtsClean.kept;
 
-  // 长期事实：清垃圾 + 合并近似 + 压短（垃圾清掉不再补回）
+  // 长期事实：先分成「普通事实」和「欠账」两堆，规则不一样。
+  // 欠账是账目不是印象：不许模型压短、不许并进别的条目、不许按重要度砍
+  // （砍账本等于赖账），只做规范化、完全同文去重、和一份独立预算。
   const factsIn = (mem.facts || [])
     .map((f) => (typeof f === 'string' ? f : f && f.text))
     .map((s) => String(s || '').trim())
     .filter(Boolean);
-  const factsClean = dedupeList('fact', factsIn, MAX_FACTS, MAX_FACT_CHARS);
+  const debtsIn = factsIn.filter((t) => isDebt(t));
+  const plainIn = factsIn.filter((t) => !isDebt(t));
+
+  // 普通事实：清垃圾 + 合并近似 + 压短（垃圾清掉不再补回）
+  const factsClean = dedupeList('fact', plainIn, MAX_FACTS, MAX_FACT_CHARS);
   removed.push(...factsClean.removed);
   let factsNew = factsClean.kept;
   if (!DRY && !CHECK_ONLY) {
@@ -285,12 +292,65 @@ async function tidy(mem) {
     log(`记忆预算：事实 ${factChars0} 字 → ${used} 字（上限 ${FACT_BUDGET}，砍掉 ${byScore.length - keep.length} 条）`);
   }
 
+  // ── 欠账（小账本）：规范化 → 划掉已结 → 独立预算，全程不碰模型 ──────
+  const DEBT_BUDGET = Number(process.env.DEBT_BUDGET_CHARS || 600);
+  const debtsNorm = [];
+  const seenDebt = new Set();
+  for (const raw of debtsIn) {
+    const fitted = fitDebt(raw);
+    if (!fitted) {
+      removed.push({ cat: 'fact', text: raw, reason: '欠账拆不出来（缺内容或日期），对不了账' });
+      continue;
+    }
+    if (fitted !== raw) log(`欠账规范化：${raw} → ${fitted}`);
+    if (seenDebt.has(norm(fitted))) {
+      removed.push({ cat: 'fact', text: raw, reason: '同一笔欠账记了不止一遍' });
+      continue;
+    }
+    seenDebt.add(norm(fitted));
+    debtsNorm.push(fitted);
+  }
+  let debts = [];
+  for (const d of debtsNorm) {
+    const p = debtParse(d);
+    if (p && p.settled) {
+      removed.push({ cat: 'fact', text: d, reason: '欠账已结清，从账本上划掉' });
+      continue;
+    }
+    debts.push(d);
+  }
+  const debtChars0 = debts.reduce((a, s) => a + s.length, 0);
+  if (debtChars0 > DEBT_BUDGET) {
+    // 账本满了：按日期从老到新丢，只留最近的。丢的每一笔都留证据，
+    // 因为「欠账消失」比「事实消失」更敏感 —— 那等于替她把账赖了。
+    const byDate = debts
+      .map((t, i) => ({ t, i, d: debtParse(t)?.date || '' }))
+      .sort((a, b) => (b.d || '').localeCompare(a.d || '') || b.i - a.i);
+    const keep = [];
+    let used = 0;
+    for (const x of byDate) {
+      if (used + x.t.length > DEBT_BUDGET) {
+        removed.push({ cat: 'fact', text: x.t, reason: `欠账超出账本预算 ${DEBT_BUDGET} 字，先丢最老的（该催了）` });
+        continue;
+      }
+      used += x.t.length;
+      keep.push(x);
+    }
+    keep.sort((a, b) => a.i - b.i);
+    debts = keep.map((x) => x.t);
+    log(`欠账预算：${debtChars0} 字 → ${used} 字（上限 ${DEBT_BUDGET}，${debtsNorm.length} → ${debts.length} 笔）`);
+  }
+  if (debts.length) {
+    // 账本放最前面：她要翻账时先看见，也避免被普通事实的顺序挤到后面
+    factsNew = [...debts, ...factsNew];
+  }
+
   const out = { topics, impressions, thoughts, facts: factsNew };
   const summary =
     `话题 ${(mem.activeTopics || []).length}→${topics.length}｜` +
     `印象 ${Object.keys(mem.memberImpressions || {}).length}→${Object.keys(impressions).length} 人｜` +
     `想法 ${(mem.pendingThoughts || []).length}→${thoughts.length}｜` +
-    `长期事实 ${factsIn.length}→${factsNew.length}`;
+    `长期事实 ${plainIn.length}→${factsNew.length - debts.length}｜欠账 ${debtsIn.length}→${debts.length}`;
   return { out, removed, summary };
 }
 
@@ -299,6 +359,7 @@ function writeStats(out) {
     const data = {
       at: new Date().toISOString(),
       facts: out.facts.length,
+      debts: out.facts.filter((f) => isDebt(f)).length,
       topics: out.topics.length,
       thoughts: out.thoughts.length,
       people: Object.keys(out.impressions).length,
@@ -331,7 +392,10 @@ async function writeMem(out) {
       });
     }
   }
-  for (const f of out.facts) {
+  // 写回顺序：普通事实先写、欠账最后写。桥接那层 facts 超过 40 条时按
+  // 「最近确认的优先」砍，账本要是先写就成了「最老的」，一超量先掉账。
+  const factsOut = [...out.facts.filter((f) => !isDebt(f)), ...out.facts.filter((f) => isDebt(f))];
+  for (const f of factsOut) {
     await api('/api/socialV2/memory-append', { method: 'POST', body: JSON.stringify({ key: KEY, category: 'fact', content: f }) });
   }
 }
@@ -401,7 +465,9 @@ async function aiJudge(out) {
   if (process.env.TIDY_AI_JUDGE === '0') return [];
   const items = [];
   const push = (id, cat, text, target) => items.push({ id, cat, text, target });
-  out.facts.forEach((f, i) => push(`F${i + 1}`, 'fact', f));
+  // 欠账不进复审：模型分不清「鸭腿×10」和「鸭腿×2」是两笔还是一笔，
+  // 一旦被它判成重复就是替她赖账。账本只由规则处理。
+  out.facts.filter((f) => !isDebt(f)).forEach((f, i) => push(`F${i + 1}`, 'fact', f));
   out.topics.forEach((t, i) => push(`T${i + 1}`, 'activeTopic', t.text));
   out.thoughts.forEach((t, i) => push(`H${i + 1}`, 'pendingThought', t));
   for (const [target, im] of Object.entries(out.impressions)) {
@@ -545,11 +611,13 @@ async function main() {
       removed = [...removed, ...judged];
     }
 
+    const factTextsOf = (m) => (m.facts || []).map((f) => (typeof f === 'string' ? f : f && f.text) || '');
     const summary =
       `话题 ${(mem.activeTopics || []).length}→${out.topics.length}｜` +
       `印象 ${Object.keys(mem.memberImpressions || {}).length}→${Object.keys(out.impressions).length} 人｜` +
       `想法 ${(mem.pendingThoughts || []).length}→${out.thoughts.length}｜` +
-      `长期事实 ${(mem.facts || []).length}→${out.facts.length}`;
+      `长期事实 ${factTextsOf(mem).filter((t) => !isDebt(t)).length}→${out.facts.filter((t) => !isDebt(t)).length}｜` +
+      `欠账 ${factTextsOf(mem).filter((t) => isDebt(t)).length}→${out.facts.filter((t) => isDebt(t)).length}`;
 
     // 用「同样的形状」比对，判断这轮到底改了什么（不想因为字段顺序误判成有变化）
     const flat = (m) => ({
@@ -618,4 +686,57 @@ async function snapshotRestore(mem) {
   } catch (e) { log('恢复失败（快照文件还在 chat-memory/）:', e.message); }
 }
 
+// ── 自测：账本规则（不碰桥接、不花钱）────────────────────────────────
+// 只测「欠账那一堆」的规矩：规范化、同文去重、已结划掉、超长保日期、超预算丢最老。
+// 普通事实的处理逻辑没动，跑 --dry 看真数据就行。
+async function selftest() {
+  const fails = [];
+  const eq = (name, cond, detail = '') => {
+    if (cond) console.log('  ✓ ' + name);
+    else { console.log('  ✗ ' + name + (detail ? '：' + detail : '')); fails.push(name); }
+  };
+  console.log('=== 账本自测 ===');
+
+  const mem = {
+    facts: [
+      { text: '哥爱吃狮子头' },
+      { text: '欠账|鸭腿×10  ｜ 2026-10-28' },
+      { text: '欠账｜鸭腿×10｜2026-10-28' },
+      { text: '欠账｜肉串一份｜2026-10-27｜已结' },
+      { text: '欠账｜' + '很长'.repeat(40) + '｜2026-10-01' },
+      { text: '欠账｜' },
+    ],
+    activeTopics: [],
+    pendingThoughts: [],
+    memberImpressions: {},
+  };
+  const { out, removed, summary } = await tidy(mem);
+  const debts = out.facts.filter((t) => isDebt(t));
+  eq('重复的同一笔只剩一条', debts.filter((t) => t.includes('鸭腿×10')).length === 1, debts.join(' / '));
+  eq('半角/空格被规范化', debts.includes('欠账｜鸭腿×10｜2026-10-28'), debts.join(' / '));
+  eq('已结清的从账本划掉', !debts.some((t) => t.includes('肉串')));
+  eq('超长欠账被截短但保住日期', debts.some((t) => t.startsWith('欠账｜很长') && t.endsWith('｜2026-10-01')) && debts.every((t) => t.length <= DEBT_MAX_CHARS), debts.find((t) => t.startsWith('欠账｜很长')) || '没找到');
+  eq('拆不出来的欠账删掉并留证据', removed.some((r) => r.reason.includes('拆不出来')));
+  eq('普通事实原样保留', out.facts.includes('哥爱吃狮子头'));
+  eq('汇总里带欠账口径', /欠账 \d+→\d+/.test(summary), summary);
+
+  // 超预算：造 30 笔，每天一笔；只该留下最近的几笔，最老的被丢且留证据
+  const many = [];
+  for (let i = 1; i <= 30; i++) {
+    const d = String(i).padStart(2, '0');
+    many.push({ text: `欠账｜占位账单×${i}｜2026-09-${d}` });
+  }
+  const { out: out2, removed: removed2 } = await tidy({ facts: many, activeTopics: [], pendingThoughts: [], memberImpressions: {} });
+  const debts2 = out2.facts.filter((t) => isDebt(t));
+  const chars2 = debts2.reduce((a, s) => a + s.length, 0);
+  const budget = Number(process.env.DEBT_BUDGET_CHARS || 600);
+  eq('账本不超过预算', chars2 <= budget, `${chars2} > ${budget}`);
+  eq('超预算时丢的是最老的（新的还在）', debts2.some((t) => t.includes('×30')) && !debts2.some((t) => t.includes('×1｜')), debts2.join(' / '));
+  eq('丢账有删除记录', removed2.some((r) => r.reason.includes('账本预算')));
+
+  console.log(fails.length ? `\n失败 ${fails.length} 项：${fails.join('、')}` : '\n全部通过');
+  return fails.length === 0;
+}
+
+if (SELFTEST) process.exit((await selftest()) ? 0 : 1);
 await main();

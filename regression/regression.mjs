@@ -10,7 +10,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { ROOT, BRIDGE, portOpen, chatKey } from '../lib/base.mjs';
+import { DEBT_MAX_CHARS, debtParse, isDebt } from '../lib/memory-rules.mjs';
 
 const STARTUP = path.join(process.env.APPDATA || '', 'Microsoft/Windows/Start Menu/Programs/Startup');
 
@@ -100,17 +102,52 @@ check('自启项 >= 2（其余由计划任务/supervisor 负责）', () => start
 
 // ---- 记忆 ----
 let memoryOk = false;
+let memRaw = {};
 try {
   const token = read(path.join(BRIDGE, 'state', 'console-token')).trim();
   const res = await fetch('http://127.0.0.1:3100/api/socialV2/memory?key=' + encodeURIComponent(chatKey()), { headers: { 'x-console-token': token } });
   const j = await res.json();
   const raw = j.raw || {};
+  memRaw = raw;
   const n = (raw.activeTopics || []).length + Object.keys(raw.memberImpressions || {}).length;
   memoryOk = n > 0;
   check('记忆非空', () => memoryOk || `话题+印象 = ${n}`);
 } catch (e) {
   check('记忆非空', () => `读取失败：${e.message}`);
 }
+
+// ---- 欠账本（2026-10-29）----
+// 起因：鸭腿债在记忆里被摘要压成「十根…两只…打五折」一坨，谁也说不清欠多少。
+// 现在欠账走固定格式 fact，规则一份、tidy 不许压、唤醒单独注入。四道都要在位。
+check('欠账规则一份（memory-rules）', () => {
+  const r = read(path.join(ROOT, 'lib', 'memory-rules.mjs'));
+  return (r.includes('export function isDebt') && r.includes('export function debtParse') && r.includes('export function fitDebt')) || 'memory-rules 里缺欠账解析函数';
+});
+check('memory-tidy 不许压账本', () => {
+  const t = read(path.join(ROOT, 'memory-tidy', 'memory-tidy.mjs'));
+  const ok = /isDebt|fitDebt/.test(t) && t.includes('DEBT_BUDGET');
+  return ok || 'tidy 没接欠账保护：账目会被模型压短或并掉，等于替她赖账';
+});
+check('唤醒提示里有【欠账】段', () => {
+  const b = read(path.join(BRIDGE, 'src', 'bridge.js'));
+  return b.includes('【欠账') || 'bridge.js 里没有欠账段：账本记了也翻不到';
+});
+check('预设教了欠账格式', () => {
+  const p = read(preset);
+  return (p.includes('欠账｜') && p.includes('欠账记法')) || '预设里没写「欠账｜内容×数量｜日期」，她不会按格式记';
+});
+check('记忆里的欠账能对账', () => {
+  const facts = (memRaw.facts || []).map((f) => (typeof f === 'string' ? f : f && f.text)).filter(Boolean).map(String);
+  const ds = facts.filter(isDebt);
+  const bad = ds.filter((t) => !debtParse(t) || t.length > DEBT_MAX_CHARS);
+  return bad.length === 0 || `有 ${bad.length} 条欠账格式坏了：${bad.slice(0, 2).join('；')}`;
+});
+check('账本规则自测通过（tidy --selftest）', () => {
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'memory-tidy', 'memory-tidy.mjs'), '--selftest'], { encoding: 'utf8', timeout: 60000 });
+  if (r.status === 0) return true;
+  const bad = String(r.stdout || '').split('\n').filter((l) => l.includes('✗')).join('；');
+  return '自测失败：' + (bad || r.stderr || '未知原因');
+});
 
 // ---- 档案 ----
 const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
