@@ -455,6 +455,48 @@ function ensureSilentTasks(state) {
   }
 }
 
+/**
+ * 短信验证链接只跟「那一次」登录请求的 sid 绑定：脚本一退出，链接就作废。
+ * 所以这里再拉一个后台登录进程，让它带着长时间轮询等人验证，
+ * 顺便把链接写进 state/qq-verify-link.txt（桌面通知里也带上）。
+ * 返回拿到的链接；拿不到就返回空串，外层会退化成「去 WebUI」的说法。
+ */
+async function startVerifyPoller(qqLogin) {
+  const linkFile = path.join(STATE_DIR, 'qq-verify-link.txt');
+  const pollLog = path.join(STATE_DIR, 'qq-verify.log');
+  try { fs.unlinkSync(linkFile); } catch {}
+  const waitSec = Number(process.env.VERIFY_WAIT_SEC || 1800);
+  try {
+    const out = fs.openSync(pollLog, 'w');
+    const child = spawn(process.execPath, [qqLogin, 'password'], {
+      cwd: ROOT,
+      detached: true,
+      windowsHide: true,
+      stdio: ['ignore', out, out],
+      env: { ...process.env, WAIT_SEC: String(waitSec), DSH_NO_HOT_RELOAD: '1' },
+    });
+    child.unref();
+  } catch (e) {
+    log('起后台验证进程失败：' + String(e.message || e).slice(0, 120));
+    return '';
+  }
+  // 它先打链接再开始轮询，最多等 15 秒
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    try {
+      const m = /https:\/\/ti\.qq\.com\/\S+/.exec(fs.readFileSync(pollLog, 'utf8'));
+      if (m) {
+        try { fs.writeFileSync(linkFile, `${new Date().toISOString()}\n${m[0]}\n`); } catch {}
+        log(`短信验证链接已落盘（state/qq-verify-link.txt），后台等人工验证，最多 ${Math.round(waitSec / 60)} 分钟`);
+        return m[0];
+      }
+    } catch {}
+    await sleep(500);
+  }
+  log('后台验证进程没吐出链接（可能密码/账号有问题），去看 state/qq-verify.log');
+  return '';
+}
+
 async function main() {
   const state = loadState();
 
@@ -488,9 +530,19 @@ async function main() {
         if (e.status === 2 || e.status === 3) {
           const waitH = Number(process.env.HUMAN_WAIT_H || 2);
           st.pausedUntil = Date.now() + waitH * 3600 * 1000;
-          const text = e.status === 2
-            ? 'QQ 登录需要短信/验证码验证，自动重试已暂停。\n\n打开 NapCat WebUI（http://127.0.0.1:6099）完成验证，或用手机登录这个号后扫码。'
-            : 'QQ 把这次登录判成「新设备」，需要扫码验证，自动重试已暂停。\n\n用登录着这个号的手机扫码（NapCat WebUI 里有二维码）。';
+          let text;
+          if (e.status === 2) {
+            // 2026-10-29 踩的坑：验证链接跟「这一次」密码请求的 sid 绑定，脚本一退出链接就作废。
+            // 那天哥点链接时链接早死了，来回折腾三次。
+            // 现在改成：再起一个后台登录进程，带着 30 分钟轮询等人验证，
+            // 并把链接落到 state/qq-verify-link.txt（桌面通知里也带上）。
+            const link = await startVerifyPoller(qqLogin);
+            text = link
+              ? `QQ 需要短信/验证码验证（自动重试已暂停）。\n\n链接（30 分钟内有效，后台在等你验证）：\n${link}\n\n已写入 state/qq-verify-link.txt`
+              : 'QQ 登录需要短信/验证码验证，自动重试已暂停。\n\n打开 NapCat WebUI（http://127.0.0.1:6099）完成验证，或用手机登录这个号后扫码。';
+          } else {
+            text = 'QQ 把这次登录判成「新设备」，需要扫码验证，自动重试已暂停。\n\n用登录着这个号的手机扫码（NapCat WebUI 里有二维码）。';
+          }
           if (Date.now() - st.alertedAt > ALERT_COOLDOWN_MS) {
             try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}
             desktopAlert(text);

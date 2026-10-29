@@ -210,6 +210,11 @@ check('计划任务用静默启动', () => {
   return line.includes('run-hidden.vbs') || `动作还是「${line}」——每 2 分钟会闪一个 cmd 黑框`;
 });
 
+check('短信验证会自动等人（后台轮询 + 链接落盘）', () => {
+  const s = read(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'));
+  const ok = s.includes('qq-verify-link.txt') && s.includes('VERIFY_WAIT_SEC') && s.includes('startVerifyPoller');
+  return ok || '2026-10-29 的坑：验证链接跟当次请求绑定，脚本退出就作废；没有后台轮询等于点一次白一次';
+});
 // ---- 公共件不许再被抄回去（2026-10-28 收过一次重复）----
 check('公共件存在（lib/base.mjs）', () => fs.existsSync(path.join(ROOT, 'lib', 'base.mjs')));
 check('没有脚本再抄一份路径样板', () => {
