@@ -304,6 +304,15 @@ check('余额告警在回升后会撤掉', () => {
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
   return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
 });
+check('归档器能从 QQ 历史补数据（桥接重启不至于断档）', () => {
+  // 2026-10-29：桥接 21:38 重启后 /api/socialV2/recent 直接返回 0 条，档案从 09:44 起停更一整天。
+  // QQ 自己的历史是持久的，归档器必须有这条兜底 + --rebuild 重建能力。
+  const s = fs.readFileSync(path.join(ROOT, 'archive', 'collector.mjs'), 'utf8');
+  const bad = [];
+  if (!/get_friend_msg_history/.test(s)) bad.push('没有从 QQ 历史兜底');
+  if (!/--rebuild/.test(s)) bad.push('没有 --rebuild 重建');
+  return bad.length === 0 || bad.join('；');
+});
 check('定时脚本有实例锁（计划任务和 cron 撞车也只跑一份）', () => {
   // 2026-10-29 实测：patrol 在 09:00:02 和 09:00:15 各跑一遍 —— 计划任务和 cron 两套调度撞车。
   // maintenance / daily-report / like-card 同样会被两套调度拉起，都得有锁。

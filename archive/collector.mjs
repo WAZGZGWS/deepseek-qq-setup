@@ -84,6 +84,7 @@ function inferLastTime(day) {
  * 整整一天的记录都成了占位符。名字只能运行时取。
  */
 let selfName = '';
+let selfId = 0;
 async function resolveSelfName() {
   try {
     const r = await fetch('http://127.0.0.1:3000/get_login_info', {
@@ -95,8 +96,55 @@ async function resolveSelfName() {
     const j = await r.json();
     const n = String(j?.data?.nickname || '').trim();
     if (n) selfName = n;
+    selfId = Number(j?.data?.user_id || 0) || 0;
   } catch {}
   if (!selfName) selfName = process.env.ARCHIVE_SELF_NAME || '机器人';
+}
+
+/**
+ * 从 NapCat 直接拉私聊历史（OneBot get_friend_msg_history）。
+ *
+ * 为什么需要这条路：桥接的 /api/socialV2/recent 是**内存里最近消息**，桥接一重启就空了，
+ * 于是那段时间的聊天永远进不了档案（2026-10-29 实测：09:44 之后档案停更，
+ * 而桥接 21:38 重启过，recent 直接返回 0 条）。QQ 自己的历史是持久的，
+ * 拿它当第二数据源，桥接丢没丢都不影响档案。
+ */
+async function fetchOneBotHistory(limit = 100) {
+  const owner = String(KEY).startsWith('private:') ? String(KEY).slice('private:'.length) : '';
+  if (!owner) return [];
+  try {
+    const r = await fetch('http://127.0.0.1:3000/get_friend_msg_history', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ user_id: Number(owner), count: limit }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const j = await r.json();
+    const list = Array.isArray(j?.data?.messages) ? j.data.messages : [];
+    return list.map((m) => {
+      const uid = Number(m?.sender?.user_id || 0);
+      const text = (Array.isArray(m?.message) ? m.message : [])
+        .map((seg) => {
+          if (!seg || typeof seg !== 'object') return '';
+          if (seg.type === 'text') return String(seg.data?.text || '');
+          if (seg.type === 'image') return '[图片]';
+          if (seg.type === 'face') return '[表情]';
+          return '';
+        })
+        .join('')
+        .trim();
+      return {
+        // OneBot 的 time 正常是「秒」，但个别实现/patch 会给毫秒 —— 按量级判断，别盲乘 1000
+        time: (() => { const raw = Number(m?.time || 0); if (!raw) return 0; return raw > 1e12 ? raw : raw * 1000; })(),
+        messageId: m?.message_id,
+        isSelf: selfId ? uid === selfId : false,
+        isOwner: !selfId ? true : uid !== selfId,
+        plain: text,
+      };
+    }).filter((m) => m.plain);
+  } catch {
+    return [];
+  }
 }
 
 async function tick() {
@@ -105,7 +153,12 @@ async function tick() {
     signal: AbortSignal.timeout(15000),
   });
   const j = await r.json();
-  const msgs = Array.isArray(j.messages) ? j.messages : [];
+  const bridgeMsgs = Array.isArray(j.messages) ? j.messages : [];
+  // 桥接那份可能因为重启而空/不全：再拉一份 QQ 自己的历史，两边合并去重。
+  const seenText = new Set(bridgeMsgs.map((m) => `${Number(m.time || 0)}|${String(m.plain || m.text || '').trim()}`));
+  const historyMsgs = (await fetchOneBotHistory()).filter((m) => !seenText.has(`${m.time}|${String(m.plain || '').trim()}`));
+  const msgs = [...bridgeMsgs, ...historyMsgs];
+  if (historyMsgs.length) log(`桥接 recent 只有 ${bridgeMsgs.length} 条，另从 QQ 历史补 ${historyMsgs.length} 条`);
 
   const cursor = readCursor();
   const st = cursor[KEY] && typeof cursor[KEY] === 'object' ? cursor[KEY] : null;
@@ -160,9 +213,64 @@ async function tick() {
   writeCursor(cursor);
 }
 
+/**
+ * --rebuild：用 QQ 历史整份重建今天的档案，然后重置游标。
+ *
+ * 什么时候用：桥接重启把 recent 丢了、或者游标把一批消息错标成"已归档"，
+ * 档案就会出现一天里中间断一大截（2026-10-29 就是这样：09:44 之后全空）。
+ * 重建按「时间+谁+原话」去重，重复跑也不会写重复行。
+ */
+async function rebuild() {
+  const day = today();
+  const file = path.join(OUT, `${day}.md`);
+  const byLine = new Map();
+  const keys = [];
+  const collect = (m) => {
+    const text = clean(m.plain || m.text);
+    const mt = Number(m.time || 0);
+    if (!text || !mt) return;
+    // 只重建「今天」：QQ 历史里昨天/前天的消息时间戳没带日期，混进来会排在今天同名的时刻上
+    if (new Date(mt).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }) !== day) return;
+    const who = m.isSelf ? selfName : (m.isOwner ? '哥' : (m.sender || m.userId || '?'));
+    const line = `- ${hhmm(mt)} **${who}**：${text}`;
+    byLine.set(line, mt);
+    const k = msgKey(m);
+    if (k) keys.push(k);
+  };
+
+  const r = await fetch(`http://127.0.0.1:3100/api/socialV2/recent?key=${encodeURIComponent(KEY)}&limit=80`, {
+    headers: { 'x-console-token': token() },
+    signal: AbortSignal.timeout(15000),
+  }).catch(() => null);
+  if (r?.ok) {
+    const j = await r.json().catch(() => ({}));
+    for (const m of Array.isArray(j.messages) ? j.messages : []) collect(m);
+  }
+  for (const m of await fetchOneBotHistory(200)) collect(m);
+
+  // 按行里的 HH:mm 排（直接比时间戳会被秒/毫秒混用坑到），同分钟保持原顺序
+  const lines = [...byLine.entries()]
+    .sort((a, b) => String(a[0]).slice(2, 7).localeCompare(String(b[0]).slice(2, 7)) || a[1] - b[1])
+    .map(([line]) => line);
+  if (!lines.length) { log('重建失败：一条消息都没拿到（QQ 在线吗？）'); return; }
+
+  fs.mkdirSync(OUT, { recursive: true });
+  fs.writeFileSync(file, `# ${day} 聊天记录\n\n${lines.join('\n')}\n`);
+  const maxTime = Math.max(...[...byLine.values()]);
+  const cursor = readCursor();
+  cursor[KEY] = { seen: keys.slice(-KEEP_KEYS), maxSeq: 0, lastTime: maxTime, updatedAt: Date.now() };
+  writeCursor(cursor);
+  log(`已重建 ${day} 档案：${lines.length} 行（最晚 ${hhmm(maxTime)}），游标同步重置`);
+}
+
+const REBUILD = process.argv.includes('--rebuild');
 const ONCE = process.argv.includes('--once');
 
 await resolveSelfName();
+if (REBUILD) {
+  await rebuild();
+  process.exit(0);
+}
 log(`聊天归档${ONCE ? '（单次）' : ''}启动：${KEY} → ${OUT}，每 ${INTERVAL / 1000}s`);
 await tick().catch((e) => log('首次归档失败:', e.message));
 if (ONCE) process.exit(0);
