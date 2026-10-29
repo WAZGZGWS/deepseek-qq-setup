@@ -24,6 +24,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, STATE, stamp, chatKey, consoleApi as api } from '../lib/base.mjs';
 import { DEBT_MAX_CHARS, cutText, debtParse, fitDebt, importance, isDebt, junkReason, memoryChars, norm, overlap, scanMemory, similar } from '../lib/memory-rules.mjs';
+import { singleInstance } from '../lock/single.mjs';
+// 只读/自测模式不加锁（否则排查时连 --dry 都跑不了）；正常整理才占锁，
+// 防止 cron 和手动同时跑两份、把记忆写坏。
+const INSPECT_MODE = process.argv.some((a) => a === '--dry' || a === '--check' || a === '--selftest') || process.env.DRY_RUN === '1';
+if (!INSPECT_MODE) singleInstance('memory-tidy');
 
 const KEY = chatKey();
 const SELFTEST = process.argv.includes('--selftest');

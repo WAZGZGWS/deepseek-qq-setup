@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { singleInstance } from '../lock/single.mjs';
-singleInstance('eye-drop');
+// --selftest 只跑纯规则，不该被"已有实例在跑"挡掉（回归/排查时经常要一边跑一边测）
+if (!process.argv.includes('--selftest')) singleInstance('eye-drop');
 /**
  * eye-drop —— 滴眼药水提醒，按「哥今天什么时候醒」来排，不再定死在 7:00
  *
@@ -170,7 +171,15 @@ async function arm(wakeAt) {
     { name: '滴眼药水2', offset: OFFSETS_MIN[1] ?? 10, instruction: `${guard} 否则再提一次滴眼药水，换个说法，别重复上一句原话；他要是应了也别追问。` },
   ];
   for (const r of recipes) {
-    const at = new Date(wakeAt.getTime() + r.offset * 60 * 1000);
+    let at = new Date(wakeAt.getTime() + r.offset * 60 * 1000);
+    // 醒来时间是靠「他今天第一句话」推的，可能推得很晚：机器睡到 08:26 才跑这一轮，
+    // 算出来的 08:18 早就过去了，桥接会直接回「这个时间已经过去了」，一条都排不上
+    // （2026-10-29 就整天空转）。过点了就顺延到 1 分钟后，别整天不提醒。
+    if (at.getTime() <= Date.now() + 30 * 1000) {
+      const next = new Date(Date.now() + 60 * 1000);
+      log(`${r.name} 原定 ${hhmm(at)} 已经过去了（识别得晚），改到 ${hhmm(next)}`);
+      at = next;
+    }
     if (DRY) { log(`[dry-run] 会排 ${r.name} → ${hhmm(at)}`); created.push({ id: `dry-${r.name}`, at: hhmm(at) }); continue; }
     const body = JSON.stringify({
       name: `${r.name}（${day}）`,

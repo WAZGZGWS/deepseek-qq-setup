@@ -294,7 +294,25 @@ check('滴眼药水做完就不再提', () => {
   if (!/findDoneInLines\(/.test(s)) bad.push('没有 findDoneInLines（语境判断）');
   if (!/DELETE/.test(s)) bad.push('没有撤销没执行的提醒');
   if (!/--selftest/.test(s)) bad.push('没有自测');
+  // 2026-10-29：识别醒来太晚时算出来的时间已经过去，桥接直接拒收 → 一整天一条提醒都没排上
+  if (!/已经过去了（识别得晚）/.test(s)) bad.push('过点没有顺延（晚识别就整天不提醒）');
+  if (!/if \(!process\.argv\.includes\('--selftest'\)\) singleInstance/.test(s)) bad.push('selftest 会被实例锁挡住，没法在线测');
   return bad.length === 0 || bad.join('；');
+});
+check('余额告警在回升后会撤掉', () => {
+  // 2026-10-29：10:10 写的 ALERT-balance.txt 到晚上还在，余额已经回升也没人清
+  const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
+  return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
+});
+check('定时脚本有实例锁（计划任务和 cron 撞车也只跑一份）', () => {
+  // 2026-10-29 实测：patrol 在 09:00:02 和 09:00:15 各跑一遍 —— 计划任务和 cron 两套调度撞车。
+  // maintenance / daily-report / like-card 同样会被两套调度拉起，都得有锁。
+  const bad = [];
+  for (const f of ['patrol/patrol.mjs', 'maintenance/maintenance.mjs', 'daily-report/daily-report.mjs', 'like-card/like-card.mjs']) {
+    const t = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    if (!/singleInstance\(/.test(t)) bad.push(f);
+  }
+  return bad.length === 0 || '这些没加实例锁：' + bad.join('、');
 });
 check('告警文件在恢复后会撤掉', () => {
   // 2026-10-28：11:01 写下的 ALERT-stack.txt 到 11:40 还在，谁也分不清是不是新告警。

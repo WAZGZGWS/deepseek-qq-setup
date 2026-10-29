@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { singleInstance } from '../lock/single.mjs';
+// 定时任务（计划任务）和 cron 都可能拉起同一个脚本：加实例锁，重复触发时后来的直接退出。
+// 2026-10-29 实测：patrol 在 09:00:02 和 09:00:15 各跑了一遍，就是两套调度撞在一起。
+singleInstance('maintenance');
 /**
  * maintenance —— 日志轮转 + 配置备份
  *

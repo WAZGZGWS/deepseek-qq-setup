@@ -318,6 +318,16 @@ async function tick(cfg) {
   // ---- 挑最紧急的命中档位（升序，第一个命中就是最紧急的）----
   const hit = cfg.tiers.find((t) => (!bal.available || bal.total < t.at));
   if (!hit) {
+    // 余额回到所有档位之上：把当初写的告警文件撤掉。
+    // 否则 state/ALERT-balance.txt 会一直躺着，事后分不清是旧账还是新告警
+    // （stack-doctor 的 ALERT-stack.txt 就是这个规矩，这里之前漏了）。
+    try {
+      const af = path.join(STATE_DIR, 'ALERT-balance.txt');
+      if (fs.existsSync(af)) {
+        fs.unlinkSync(af);
+        log(`余额回到 ${bal.total.toFixed(2)} 元，撤掉告警文件`);
+      }
+    } catch {}
     writeState(state);
     return;
   }
