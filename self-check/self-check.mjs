@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { ROOT, BRIDGE, STATE, stamp, today, chatKey, consoleToken as token } from '../lib/base.mjs';
 import { memoryChars, scanMemory } from '../lib/memory-rules.mjs';
 import { WORKER_NAMES } from '../supervisor/workers.mjs';
@@ -241,9 +242,50 @@ function checkRoleBreak() {
   say(hits === 0, hits === 0 ? '没有主动提 AI 身份' : `发现 ${hits} 处，考虑加强角色卡`);
 }
 
+/**
+ * 电源：笔记本一睡，网络就挂起，QQ 必掉。
+ * 2026-10-29 实测：00:40 进 Modern Standby，08:36 才醒，中间她一直离线，
+ * 醒来后密码登录还要短信验证 —— 一次睡眠换来一早上不说话。
+ */
+function checkPower() {
+  console.log('\n=== 电源 / 睡眠 ===');
+  const read = (sub, setting) => {
+    try {
+      const out = execFileSync('powercfg', ['/query', 'SCHEME_CURRENT', sub, setting], { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+      // 输出是本地化的（中文系统里是“当前交流/直流电源设置索引”），
+      // 而且 Node 读出来可能带乱码 —— 不认文字，只按顺序取两个十六进制值：先交流、后直流。
+      const hexes = [...out.matchAll(/0x([0-9a-fA-F]+)/g)].map((m) => parseInt(m[1], 16));
+      return { ac: hexes[0] ?? -1, dc: hexes[1] ?? -1 };
+    } catch {
+      return { ac: -1, dc: -1 };
+    }
+  };
+  const never = (v) => v === 0 || v === 0xffffffff; // 0 和 0xFFFFFFFF 都表示「永不」
+  const sleep = read('SUB_SLEEP', 'STANDBYIDLE');
+  say(never(sleep.ac) && never(sleep.dc), `睡眠超时 交流=${sleep.ac === 0xffffffff ? '永不' : sleep.ac + 's'} 电池=${sleep.dc === 0xffffffff ? '永不' : sleep.dc + 's'}`);
+
+  const video = read('SUB_VIDEO', 'VIDEOIDLE');
+  say(never(video.ac), `熄屏超时 交流=${video.ac === 0xffffffff ? '永不' : video.ac + 's'}（熄屏会进 Modern Standby 断网）`);
+
+  // 自启里有没有「保持唤醒」，没有的话睡眠照样会把她带走
+  let awake = false;
+  try {
+    const run = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'QQKeepAwake'], { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+    awake = /QQKeepAwake/i.test(run);
+  } catch {}
+  if (!awake) {
+    try {
+      const dir = path.join(os.homedir(), 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+      awake = fs.readdirSync(dir).some((f) => /keepawake/i.test(f));
+    } catch {}
+  }
+  say(awake, awake ? '开机自启里有「保持唤醒」' : '没有「保持唤醒」自启项：电脑空闲睡眠时她会掉线');
+}
+
 console.log(`=== self-check ${FIX ? '(--fix)' : ''} ${stamp()} ===`);
 checkKey();
 checkRestartLoop();
+checkPower();
 await checkMemory();
 await checkArchiveBothSides();
 checkRoleBreak();
