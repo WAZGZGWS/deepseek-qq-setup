@@ -513,6 +513,23 @@ async function main() {
     const pwdFile = path.join(ROOT, 'qq-password.dat');
     const qqLogin = path.join(ROOT, 'tools', 'qq-login.mjs');
     if (fs.existsSync(pwdFile) && fs.existsSync(qqLogin) && (await probePort(WEBUI_PORT))) {
+      // 0) 先试「快速登录」：用本机缓存 ticket，不碰密码、不会触发短信验证。
+      //    下午被服务端踢下线时这一步最关键 —— 成了她自己就回来了，不用等人。
+      try {
+        const out = execFileSync(process.execPath, [qqLogin, 'quick'], {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 150000,
+          env: { ...process.env, DSH_NO_HOT_RELOAD: '1' },
+        });
+        const last = String(out || '').trim().split('\n').filter(Boolean).pop() || '';
+        if (last) log('快速登录：' + last.slice(0, 160));
+        if ((await probeNapcat()).ok) return true;
+      } catch (e) {
+        const msg = String((e.stdout || '') + (e.stderr || '') || e.message).trim().split('\n').filter(Boolean).pop();
+        log('快速登录没成：' + String(msg).slice(0, 160));
+      }
+      // 1) 再走密码登录
       try {
         const out = execFileSync(process.execPath, [qqLogin, 'password'], {
           encoding: 'utf8',

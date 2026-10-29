@@ -200,12 +200,44 @@ async function qr() {
   return true;
 }
 
+/**
+ * 快速登录：用本机缓存的那张 ticket 直接登，**不需要密码、也不会触发短信验证**。
+ *
+ * 为什么要它：下午被服务端踢下线以后，密码登录几乎必然要短信验证（人不在就废了）；
+ * 而 quicklogin ticket 有时还有效，试一次的成本极低 —— 成了她就自己回来了。
+ * NapCat WebUI 的对应接口是 /api/QQLogin/SetQuickLogin（页面里点「快捷登录」就是它）。
+ */
+async function quickLogin() {
+  if (await oneBotLogin()) {
+    console.log('已经登录着，不用再登');
+    return true;
+  }
+  const uin = botUin();
+  if (!uin) throw new Error('没从启动脚本里找到机器人 QQ 号');
+  const cred = await auth();
+  const res = await call(cred, '/SetQuickLogin', { uin });
+  const brief = JSON.stringify(res?.data ?? res).slice(0, 160);
+  console.log('快速登录请求已发：' + brief);
+  // QQ 客户端要重启一次才走快捷登录，给它最多 2 分钟
+  for (let i = 0; i < 24; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    if (await oneBotLogin()) {
+      console.log('快速登录成功（没要验证）');
+      return true;
+    }
+  }
+  console.log('快速登录没成功（本地 ticket 大概已经失效），需要密码/扫码');
+  process.exitCode = 4;
+  return false;
+}
+
 const cmd = process.argv[2] || 'status';
 try {
   if (cmd === 'status') await status();
   else if (cmd === 'password') await passwordLogin();
+  else if (cmd === 'quick') await quickLogin();
   else if (cmd === 'qr') await qr();
-  else console.log('用法: node tools/qq-login.mjs [status|password|qr]');
+  else console.log('用法: node tools/qq-login.mjs [status|password|quick|qr]');
 } catch (e) {
   console.error('出错:', e.message);
   process.exitCode = 1;

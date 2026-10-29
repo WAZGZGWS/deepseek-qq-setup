@@ -304,6 +304,14 @@ check('余额告警在回升后会撤掉', () => {
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
   return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
 });
+check('掉线先试快速登录（不触发短信）', () => {
+  // 2026-10-29：下午被踢后密码登录几乎必然要短信，人不在就整下午失联。
+  // 本机 ticket 有时还有效，先试它一次成本极低，成了她就自己回来了。
+  const login = fs.readFileSync(path.join(ROOT, 'tools', 'qq-login.mjs'), 'utf8');
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  const ok = /async function quickLogin/.test(login) && /'quick'/.test(login) && /qqLogin, 'quick'/.test(doc);
+  return ok || '掉线恢复没有先试快速登录：只能走密码 → 要短信 → 下午没人就失联';
+});
 check('自检会看档案空档（不是只看文件在不在）', () => {
   // 2026-10-29 复盘：10-26/27/28 档案各缺 ~9.5 小时，self-check 却一直"全部正常"，
   // 因为它只查文件存在/双方都有话，不查覆盖。现在加一条按空档 >=3 小时提示。
