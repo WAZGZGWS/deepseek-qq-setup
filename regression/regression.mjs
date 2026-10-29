@@ -210,6 +210,13 @@ check('计划任务用静默启动', () => {
   return line.includes('run-hidden.vbs') || `动作还是「${line}」——每 2 分钟会闪一个 cmd 黑框`;
 });
 
+check('保持唤醒有自愈（巡检判活 + 心跳）', () => {
+  const d = read(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'));
+  const s = read(path.join(ROOT, '4-hold-awake.ps1'));
+  const okD = d.includes('keep-awake.heartbeat') && d.includes("handle(state, 'keepAwake'");
+  const okS = s.includes('keep-awake.heartbeat');
+  return (okD && okS) || '2026-10-29 的坑：保持唤醒进程死了没人管，合盖就睡、QQ 掉线 10 小时';
+});
 check('短信验证会自动等人（后台轮询 + 链接落盘）', () => {
   const s = read(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'));
   const ok = s.includes('qq-verify-link.txt') && s.includes('VERIFY_WAIT_SEC') && s.includes('startVerifyPoller');

@@ -457,6 +457,26 @@ else {
           Say '  [OK] 插电时不再自动睡眠' 'Green' } catch { Say '  [--] 电源设置没改成功' 'Yellow' }
     try { Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name HiberbootEnabled -Value 0 -ErrorAction Stop
           Say '  [OK] 快速启动已关闭' 'Green' } catch { Say '  [--] 快速启动没关掉' 'Yellow' }
+
+    # 保持唤醒：光改超时不够 —— 有的 OEM 会在合盖/空闲时自己进 Modern Standby，
+    # 一进网络就断，QQ 直接掉线（2026-10-29 掉过 10 小时）。
+    # 这里挂一个常驻的 SetThreadExecutionState 守卫 + 开机自启，巡检还会盯着它的心跳。
+    $keepVbs = Join-Path $TargetDir 'keep-awake.vbs'
+    if (Test-Path $keepVbs) {
+        try {
+            $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+            New-Item -Path $runKey -Force | Out-Null
+            Set-ItemProperty -Path $runKey -Name 'QQKeepAwake' -Value ('wscript.exe "' + $keepVbs + '"') -ErrorAction Stop
+            Say '  [OK] 保持唤醒已加入开机自启' 'Green'
+        } catch { Say '  [--] 保持唤醒自启没加上' 'Yellow' }
+        try { Start-Process -FilePath 'wscript.exe' -ArgumentList ('"' + $keepVbs + '"') -WindowStyle Hidden
+              Say '  [OK] 保持唤醒已在跑（进程死了巡检会在 2 分钟内重拉）' 'Green' } catch { Say '  [--] 保持唤醒没起来' 'Yellow' }
+    }
+    # 合盖动作：0 = 不采取任何操作（机器留在桌上合着盖也不会睡）
+    try { powercfg /setacvalueindex SCHEME_CURRENT 4f971e89-eebd-4455-a8de-9e59040e7347 5ca83367-6e45-459f-a27b-476b1d01c936 0 2>$null
+          powercfg /setdcvalueindex SCHEME_CURRENT 4f971e89-eebd-4455-a8de-9e59040e7347 5ca83367-6e45-459f-a27b-476b1d01c936 0 2>$null
+          powercfg /setactive SCHEME_CURRENT 2>$null
+          Say '  [OK] 合盖不睡眠' 'Green' } catch { Say '  [--] 合盖动作没改成功（可能要管理员）' 'Yellow' }
 }
 
 # ── 10. 依次启动 ────────────────────────────────────────────────

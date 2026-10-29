@@ -628,6 +628,26 @@ async function main() {
     manualHint: '后台脚本拉不起来，记忆/余额/定时任务会停。双击安装目录里的「20-supervisor.bat」',
   });
 
+  // 4.5 保持唤醒：它一死，机器迟早自己睡，QQ 跟着掉。
+  // 2026-10-29 的实锤：这个进程悄悄没了没人发现，中午合盖后就进了 Modern Standby，
+  // 一掉 10 小时。现在靠 4-hold-awake.ps1 每 30 秒写的状态心跳判活，不新鲜就重拉。
+  const hbFile = path.join(STATE_DIR, 'keep-awake.heartbeat');
+  let beatMs = Infinity;
+  try { beatMs = Date.now() - fs.statSync(hbFile).mtimeMs; } catch {}
+  const keepAwakeUp = beatMs < 90 * 1000;
+  await handle(state, 'keepAwake', keepAwakeUp, () => {
+    const vbs = path.join(ROOT, 'keep-awake.vbs');
+    if (!fs.existsSync(vbs)) {
+      log('找不到 keep-awake.vbs，没法拉起保持唤醒');
+      return false;
+    }
+    return spawnDetached('wscript.exe', [vbs], { cwd: ROOT });
+  }, {
+    label: '保持唤醒',
+    why: Number.isFinite(beatMs) ? `心跳 ${Math.round(beatMs / 1000)} 秒前` : '没有心跳文件',
+    manualHint: '保持唤醒没起来，机器可能会自己睡眠、QQ 跟着掉线。双击安装目录里的 4-hold-awake.ps1 可以手动顶住。',
+  });
+
   saveState(state);
 
   // 心跳：一小时至少写一行，证明计划任务还在跑

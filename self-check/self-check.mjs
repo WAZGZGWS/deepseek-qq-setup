@@ -304,6 +304,15 @@ function checkPower() {
     } catch {}
   }
   say(awake, awake ? '开机自启里有「保持唤醒」' : '没有「保持唤醒」自启项：电脑空闲睡眠时她会掉线');
+
+  // 自启项只保证「开机时有」；进程中途死掉没人知道。
+  // 2026-10-29 就是这样：进程悄悄没了，中午合盖机器自己睡，QQ 一掉 10 小时。
+  // 4-hold-awake.ps1 每 30 秒写一次心跳，巡检也按它判活并重拉。
+  const beat = path.join(ROOT, 'state', 'keep-awake.heartbeat');
+  let beatAge = Infinity;
+  try { beatAge = Date.now() - fs.statSync(beat).mtimeMs; } catch {}
+  const alive = beatAge < 3 * 60 * 1000;
+  say(alive, alive ? `保持唤醒进程还活着（心跳 ${Math.round(beatAge / 1000)} 秒前）` : `保持唤醒没心跳（${Number.isFinite(beatAge) ? Math.round(beatAge / 60000) + ' 分钟前' : '文件不存在'}）：机器随时可能自己睡，巡检会重拉`);
 }
 
 console.log(`=== self-check ${FIX ? '(--fix)' : ''} ${stamp()} ===`);
