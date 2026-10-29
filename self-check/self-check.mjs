@@ -313,6 +313,17 @@ function checkPower() {
   try { beatAge = Date.now() - fs.statSync(beat).mtimeMs; } catch {}
   const alive = beatAge < 3 * 60 * 1000;
   say(alive, alive ? `保持唤醒进程还活着（心跳 ${Math.round(beatAge / 1000)} 秒前）` : `保持唤醒没心跳（${Number.isFinite(beatAge) ? Math.round(beatAge / 60000) + ' 分钟前' : '文件不存在'}）：机器随时可能自己睡，巡检会重拉`);
+
+  // 进过 Modern Standby 就会断网，QQ 跟着掉。合盖动作/熄屏超时都已经设成 0，
+  // 但 OEM 固件仍可能自己进待机 —— 所以直接看事件日志，进了就报出来。
+  let standby = 0;
+  try {
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Kernel-Power'; StartTime=(Get-Date).AddHours(-24)} -ErrorAction SilentlyContinue | Where-Object { $_.Id -eq 506 } | Measure-Object).Count",
+    ], { encoding: 'utf8', windowsHide: true, timeout: 25000 });
+    standby = Number(String(out || '').trim() || 0);
+  } catch {}
+  say(standby === 0, standby ? `最近 24 小时进过 ${standby} 次 Modern Standby（每次都可能断网掉线）` : '最近 24 小时没进过 Modern Standby');
 }
 
 console.log(`=== self-check ${FIX ? '(--fix)' : ''} ${stamp()} ===`);
