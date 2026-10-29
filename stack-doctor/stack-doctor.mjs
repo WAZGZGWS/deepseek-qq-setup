@@ -349,6 +349,8 @@ async function handle(state, name, up, restartFn, opts = {}) {
     s.downSince = 0;
     s.pausedUntil = 0;
     s.starts = s.starts.filter((t) => t > Date.now() - RETRY_WINDOW);
+    // 验证链接是一次性的：登进去了就删掉，免得以后点开一个早就失效的旧链接
+    try { fs.unlinkSync(path.join(STATE_DIR, 'qq-verify-link.txt')); } catch {}
     return;
   }
 
@@ -528,7 +530,7 @@ async function main() {
         // 这两种再重试只会让 QQ 风控更紧（今天就是这样从「能登」变成「要短信」的），
         // 所以直接停手、等人来，别每两分钟撞一次。
         if (e.status === 2 || e.status === 3) {
-          const waitH = Number(process.env.HUMAN_WAIT_H || 2);
+          const waitH = Number(process.env.HUMAN_WAIT_H || 6);
           st.pausedUntil = Date.now() + waitH * 3600 * 1000;
           let text;
           if (e.status === 2) {

@@ -47,11 +47,21 @@ function procCount(name) {
 function recentErrors(n = 5) {
   try {
     const lines = fs.readFileSync(path.join(STATE, 'bridge.log'), 'utf8').split('\n').slice(-60);
-    const benign = /(重连中|未连接|不可用|icacls|EPERM|SnowLuma 错误：\{\}|token 自愈失败|看门狗第)/;
+    // 这些都是「正常噪音」：断线重连、权限提示、以及 QQ 掉线期间必然刷屏的 WS 关闭。
+    // 2026-10-29 就是被最后这条反复误报「日志有 5 条异常」，真正的问题反而被淹了。
+    const benign = /(重连中|未连接|不可用|icacls|EPERM|SnowLuma 错误：\{\}|token 自愈失败|看门狗第|WebSocket closed before opening)/;
     return lines
       .filter((l) => /错误|失败|ERROR/i.test(l) && !benign.test(l))
       .slice(-n);
   } catch { return []; }
+}
+
+/** stack-doctor 是不是正在「等人工验证」——是的话别去拉 NapCat 跟它撞车 */
+function doctorPaused() {
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(ROOT, 'state', 'stack-doctor.json'), 'utf8'));
+    return Number(st?.napcat?.pausedUntil || 0) > Date.now();
+  } catch { return false; }
 }
 
 const problems = [];
@@ -76,7 +86,7 @@ if (bal.error) problems.push(`余额查询失败：${bal.error}`);
 else if (bal.total < BALANCE_WARN) problems.push(`余额只剩 ${bal.total} ${bal.currency}`);
 
 const errs = recentErrors();
-if (errs.length >= 5) problems.push(`日志最近有 ${errs.length} 条异常`);
+if (errs.length >= 5) problems.push(`日志最近有 ${errs.length} 条异常（最近一条：${errs[errs.length - 1].slice(0, 80)}）`);
 
 log(`端口 3000=${p3000} 3001=${p3001} 3100=${p3100} | 进程 QQ=${qq} node=${nodeN} DSH=${dsh} | 余额=${bal.error ? 'ERR' : bal.total}`);
 
@@ -86,7 +96,11 @@ if (!problems.length) {
   log('发现问题:', problems.join(' / '));
   // 自己处理：缺什么就把对应任务拉起来，不打扰主人
   const fixes = [];
-  if (!p3000 || !p3001) fixes.push(['NapCatAtLogon', 'NapCat']);
+  if (!p3000 || !p3001) {
+    // 正在等人工短信验证时别去拉：跟 stack-doctor 撞车只会让 QQ 风控更紧
+    if (doctorPaused()) log('QQ 在等人工验证（stack-doctor 已暂停自动重试），本次不拉 NapCat');
+    else fixes.push(['NapCatAtLogon', 'NapCat']);
+  }
   if (!p3100) fixes.push(['QQBridgeAtLogon', '桥接']);
   if (dsh === 0) fixes.push(['DeepSeekHarnessAtLogon', 'DSH']);
   for (const [task, label] of fixes) {
