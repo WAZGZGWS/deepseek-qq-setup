@@ -382,6 +382,9 @@ async function rescueLoop() {
   writeState(st);
 
   let tries = 0;
+  let lastAttemptAt = 0;
+  let downSince = 0;
+  let lastAliveAt = 0;
   let lastProblemAt = 0;
 
   const tick = async () => {
@@ -389,6 +392,8 @@ async function rescueLoop() {
     const s = brainState(now);
 
     if (s.status === 'alive') {
+      lastAliveAt = now;
+      downSince = 0;
       if (tries > 0) log('主脑回来了，权能交还，我退回静默');
       tries = 0;
       if (st.fails) { st.fails = 0; writeState(st); }
@@ -404,6 +409,10 @@ async function rescueLoop() {
 
     // 不在（死了或卡死）：开始救
     if (now - lastProblemAt > 5 * 60 * 1000) { tries = 0; lastProblemAt = now; }
+    if (!downSince) downSince = now;
+    // 退避：前两次 10 秒，之后 60 秒一次，别十秒十秒地砸
+    if (tries >= 3 && now - lastAttemptAt < 60000) return;
+    lastAttemptAt = now;
     tries += 1;
     st.rescues = (st.rescues || 0) + 1;
     st.lastRescueAt = now;
@@ -465,13 +474,21 @@ async function rescueLoop() {
       st.fails = (st.fails || 0) + 1;
       writeState(st);
       if (tries >= MAX_TRIES + 2) {
-        try {
-          fs.writeFileSync(path.join(STATE, 'ALERT-主脑.txt'),
-            `[${stamp()}] 主脑反复救不回来（连续 ${tries} 次）。\n` +
-            `端口：NapCat ${await portOpen(3000).catch(() => false) ? '通' : '断'}，桥接 ${await portOpen(3100).catch(() => false) ? '通' : '断'}\n` +
-            `看 ${MEDIC_LOG}\n`);
-        } catch {}
-        mailOnce(`主脑连续 ${tries} 次没救回来。\n先看 E:\\1\\qq-stack\\state\\medic.log 和 brain.log。\n（主脑在线时这条不会发，只有真救不回来才发）`);
+        const downFor = downSince ? now - downSince : 0;
+        const wasAliveRecently = lastAliveAt && now - lastAliveAt < 120000;
+        // 只在「真的连续断了 5 分钟、且最近没活过」时才吵他。
+        // 2026-10-30 半夜误发过一封：我在改代码反复重启主脑，急救员 40 秒内试了 5 次就发了邮件。
+        if (downFor < 5 * 60 * 1000 || wasAliveRecently) {
+          log(`抢救失败 ${tries} 次，但只断了 ${Math.round(downFor / 1000)} 秒（${wasAliveRecently ? '刚还活着过' : '还没满 5 分钟'}），先不发邮件`);
+        } else {
+          try {
+            fs.writeFileSync(path.join(STATE, 'ALERT-主脑.txt'),
+              `[${stamp()}] 主脑反复救不回来（连续 ${tries} 次，断了 ${Math.round(downFor / 60000)} 分钟）。\n` +
+              `端口：NapCat ${await portOpen(3000).catch(() => false) ? '通' : '断'}，桥接 ${await portOpen(3100).catch(() => false) ? '通' : '断'}\n` +
+              `看 ${MEDIC_LOG}\n`);
+          } catch {}
+          mailOnce(`主脑连续 ${tries} 次没救回来（断了 ${Math.round(downFor / 60000)} 分钟）。\n先看 E:\\1\\qq-stack\\state\\medic.log 和 brain.log。\n（如果是我在改代码/手动重启，忽略这封；真救不回来我才会发）`);
+        }
         tries = 0;
       }
     }
