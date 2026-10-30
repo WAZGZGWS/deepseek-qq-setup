@@ -40,7 +40,7 @@ try {
   const cur = JSON.parse(fs.readFileSync(path.join(get('live', '.'), 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state', 'current-role.json'), 'utf8'));
   if (cur.role) NAMES.push(String(cur.role));
 } catch {}
-// 角色卡文件名也算名字来源：roles/妹妹.md → 妹妹（昵称之类的还得靠 --names）
+// 角色卡文件名也算名字来源：roles/<BOT_NAME>.md → 角色名（昵称之类的还得靠 --names）
 for (const sub of ['roles', path.join('dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'roles')]) {
   try {
     for (const f of fs.readdirSync(path.join(get('live', '.'), sub))) {
@@ -48,7 +48,7 @@ for (const sub of ['roles', path.join('dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'ro
     }
   } catch {}
 }
-// 桥接配置里「必须回复」的关键词，通常就是她的名字/昵称（大肥鱼这种）
+// 桥接配置里「必须回复」的关键词，通常就是她的名字/昵称
 try {
   const cfg = JSON.parse(fs.readFileSync(path.join(get('live', '.'), 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'config.json'), 'utf8'));
   for (const k of cfg.social && cfg.social.mustReplyKeywords ? cfg.social.mustReplyKeywords : []) {
@@ -64,18 +64,63 @@ if (!get('repo')) {
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'state', 'archive', 'chat-memory', 'backups', 'versions', 'logs', 'napcat', 'dsh-qq']);
 const EXTS = new Set(['.mjs', '.js', '.cmd', '.ps1']);
 
-/** 从本机的桥接配置里读主人/机器人 QQ，用于替换 */
+/** 从本机的桥接配置里读主人/机器人 QQ 和邮箱，用于替换与泄漏扫描 */
 function readIdentities(live) {
-  const out = { owner: '', bot: '' };
+  const out = { owner: '', bot: '', mail: [] };
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(live, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'config.json'), 'utf8'));
     out.owner = String(cfg.ownerQQ || '');
+    const mail = (cfg.notify && cfg.notify.mail) || {};
+    for (const v of [mail.user, mail.to]) if (v) out.mail.push(String(v));
   } catch {}
   try {
     const j = JSON.parse(fs.readFileSync(path.join(live, 'qzone-state.json'), 'utf8'));
     void j;
   } catch {}
   return out;
+}
+
+/**
+ * 泄漏扫描：本机真实值（QQ 号、邮箱、用户名、角色名）一个都不该出现在仓库里。
+ *
+ * 2026-10-30 踩过：把发信工具拷进仓库时，代码里写死了收件邮箱；
+ * sync-check 只比「内容是否一致」，不会告诉你「仓库里躺着你的邮箱」。
+ */
+function leakScan(repo, ids) {
+  const needles = [];
+  if (ids.owner) needles.push(['主人 QQ', ids.owner]);
+  for (const m of ids.mail) needles.push(['邮箱', m]);
+  const user = (process.env.USERPROFILE || '').split(/[\\/]/).filter(Boolean).pop();
+  if (user && user.length > 2) needles.push(['本机用户名', user]);
+  for (const n of NAMES) if (n && n.length > 1) needles.push(['角色名/昵称', n]);
+
+  const hits = [];
+  const scanExts = new Set(['.mjs', '.js', '.cmd', '.ps1', '.md', '.json', '.yml', '.yaml', '.txt', '.vbs']);
+  const skip = new Set(['.git', 'node_modules', 'state', 'archive', 'chat-memory', 'backups', 'versions', 'logs', 'napcat', 'dsh-qq']);
+  const stack = [repo];
+  while (stack.length) {
+    const dir = stack.pop();
+    let ents = [];
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of ents) {
+      if (e.isDirectory()) {
+        if (!skip.has(e.name)) stack.push(path.join(dir, e.name));
+        continue;
+      }
+      if (e.name === 'config.example.json' || e.name === 'package-lock.json') continue;
+      if (!scanExts.has(path.extname(e.name).toLowerCase())) continue;
+      const file = path.join(dir, e.name);
+      let text = '';
+      try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
+      const rel = path.relative(repo, file);
+      for (const [kind, needle] of needles) {
+        if (!text.includes(needle)) continue;
+        const line = text.split('\n').findIndex((l) => l.includes(needle)) + 1;
+        hits.push(`${rel}:${line}  ${kind}（${needle.slice(0, 4)}***）`);
+      }
+    }
+  }
+  return hits;
 }
 
 /** 本机真实值 → 仓库占位符。顺序很重要（长串先替换） */
@@ -160,9 +205,18 @@ const show = (title, list) => {
   for (const x of list.sort()) console.log('  ' + x);
 };
 
+// 泄漏扫描放在最后：就算内容一致，仓库里躺着你的 QQ 号/邮箱也一样要拦
+const leaks = leakScan(REPO, ids);
+if (leaks.length) {
+  console.log(`\n个人信息泄漏（${leaks.length}）—— 这些必须换成占位符再提交：`);
+  for (const l of leaks.sort()) console.log('  ' + l);
+  console.log('\n提示：QQ 号用 YOUR_QQ / YOUR_BOT_QQ，邮箱用 YOUR_EMAIL@example.com，路径用 <STACK_ROOT>，人名用 <BOT_NAME>。');
+}
+
 if (!drift.length && !onlyRepo.length) {
   if (VERBOSE) console.log(`一致：本机与仓库没有漂移${onlyLive.length ? `（本机多 ${onlyLive.length} 个老文件，仓库不收）` : ''}`);
-  process.exit(0);
+  if (!leaks.length) console.log('一致：本机与仓库没有漂移，也没有个人信息泄漏');
+  process.exit(leaks.length ? 1 : 0);
 }
 
 console.log(`本机 ${LIVE}`);
@@ -174,7 +228,7 @@ show('只在仓库里有（本机缺）', onlyRepo);
 show('只在本机有（仓库没收录，多为老部署遗留）', onlyLive);
 
 if (drift.length) {
-  console.log('\n提示：只差几处昵称/人名时，用 --names 妹妹,大肥鱼 补上再比一次，别急着手改。');
+  console.log('\n提示：只差几处昵称/人名时，用 --names 角色名,昵称 补上再比一次，别急着手改。');
 }
 
 console.log('\n提示：不一致的那几个，先看清哪边更新，再把新的那份同步过去，别盲目覆盖。');

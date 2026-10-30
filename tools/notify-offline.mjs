@@ -12,13 +12,14 @@
  *   node tools/notify-offline.mjs --body-file=state/qq-verify-link.txt
  *
  * 凭据：qq-mail-auth.dat（DPAPI 加密，用 tools/set-mail-auth.cmd 设一次）
- * 收件人：2969862040@qq.com（可用环境变量 QQ_MAIL_TO 覆盖）
+ * 收件人：config.json 的 notify.mail.to（或环境变量 QQ_MAIL_TO），不写死在代码里
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { BRIDGE } from '../lib/base.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -32,8 +33,27 @@ try {
   process.exit(1);
 }
 
-const USER = process.env.QQ_MAIL_USER || '2969862040@qq.com';
-const TO = process.env.QQ_MAIL_TO || '2969862040@qq.com';
+/**
+ * 收发件人**不写死在代码里**：仓库要脱敏，本机要真值。
+ * 优先环境变量，其次 config.json 的 notify.mail（用户自己的配置，不入库）。
+ */
+function readMailConfig() {
+  const out = { user: process.env.QQ_MAIL_USER || '', to: process.env.QQ_MAIL_TO || '', host: 'smtp.qq.com', port: 465 };
+  try {
+    const candidates = [path.join(BRIDGE, 'config.json'), path.join(ROOT, 'config.json')];
+    const cfgPath = candidates.find((f) => fs.existsSync(f));
+    const cfg = cfgPath ? JSON.parse(fs.readFileSync(cfgPath, 'utf8')) : {};
+    const mail = cfg?.notify?.mail || {};
+    out.user = out.user || String(mail.user || '');
+    out.to = out.to || String(mail.to || mail.user || '');
+    out.host = String(mail.host || out.host);
+    out.port = Number(mail.port) || out.port;
+  } catch {}
+  return out;
+}
+const MAIL = readMailConfig();
+const USER = MAIL.user;
+const TO = MAIL.to;
 const AUTH_FILE = path.join(ROOT, 'qq-mail-auth.dat');
 const LOG = path.join(ROOT, 'state', 'notify-offline.log');
 
@@ -81,6 +101,11 @@ if (!body) {
   process.exit(2);
 }
 
+if (!USER || !TO) {
+  log('没有配置收发件人：在 config.json 里加 notify.mail.user / notify.mail.to，或用环境变量 QQ_MAIL_USER / QQ_MAIL_TO');
+  process.exit(5);
+}
+
 const auth = readAuth();
 if (!auth) {
   log('还没有授权码：先跑 tools/set-mail-auth.cmd（不会的话问 D 老师）');
@@ -88,8 +113,8 @@ if (!auth) {
 }
 
 const transport = nodemailer.createTransport({
-  host: 'smtp.qq.com',
-  port: 465,
+  host: MAIL.host,
+  port: MAIL.port,
   secure: true,
   auth: { user: USER, pass: auth },
 });
@@ -104,7 +129,7 @@ if (attachPath && fs.existsSync(attachPath)) {
 
 try {
   const info = await transport.sendMail({
-    from: `"大肥鱼掉线提醒" <${USER}>`,
+    from: `"<BOT_NAME> 掉线提醒" <${USER}>`,
     to: TO,
     subject,
     text: body,

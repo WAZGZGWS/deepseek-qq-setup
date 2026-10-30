@@ -8,7 +8,7 @@
  *   要扫就得切号，很烦。
  *
  *   NapCat 的 WebUI 其实开放了密码登录接口（`/api/QQLogin/PasswordLogin`），
- *   只要本地存了「大肥鱼」的密码，就能一条命令登回去，全程不碰手机。
+ *   只要本地存了机器人号的密码，就能一条命令登回去，全程不碰手机。
  *
  * 用法：
  *   node tools/qq-login.mjs status      看现在登录没有、登的是谁

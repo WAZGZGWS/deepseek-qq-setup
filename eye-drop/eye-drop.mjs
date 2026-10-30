@@ -286,22 +286,22 @@ function selftest() {
 
   // 语境判断：他这句没提眼药水，但那是在回她的提醒
   const ctxLines = [
-    '- 11:33 **大肥鱼**：行啊哥，吃完了才特意发给我看，那眼药水滴了没',
+    '- 11:33 **机器人**：行啊哥，吃完了才特意发给我看，那眼药水滴了没',
     '- 11:34 **哥**：早就干完的事儿了，没必要重复吧？',
   ];
-  if (!findDoneInLines(ctxLines, '大肥鱼')) { bad += 1; console.log('✗ 语境判断失败：回了提醒却没认出来'); }
+  if (!findDoneInLines(ctxLines, '机器人')) { bad += 1; console.log('✗ 语境判断失败：回了提醒却没认出来'); }
 
   const notDone = [
-    '- 11:33 **大肥鱼**：那眼药水滴了没',
+    '- 11:33 **机器人**：那眼药水滴了没',
     '- 11:34 **哥**：还没，等会儿',
   ];
-  if (findDoneInLines(notDone, '大肥鱼')) { bad += 1; console.log('✗ 误判：明明说还没滴'); }
+  if (findDoneInLines(notDone, '机器人')) { bad += 1; console.log('✗ 误判：明明说还没滴'); }
 
   const unrelated = [
-    '- 11:33 **大肥鱼**：今天中午吃啥',
+    '- 11:33 **机器人**：今天中午吃啥',
     '- 11:34 **哥**：活干完了，下班',
   ];
-  if (findDoneInLines(unrelated, '大肥鱼')) { bad += 1; console.log('✗ 误判：说的是干活不是滴药'); }
+  if (findDoneInLines(unrelated, '机器人')) { bad += 1; console.log('✗ 误判：说的是干活不是滴药'); }
 
   console.log(bad ? `自测失败 ${bad} 条` : `自测通过（${cases.length} 条 + 3 个语境用例）`);
   if (bad) process.exitCode = 1;

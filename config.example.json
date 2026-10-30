@@ -321,5 +321,14 @@
     "timeoutMs": 35000
   },
   "noticeOnQueue": false,
-  "systemNotices": false
+  "systemNotices": false,
+  "notify": {
+    "mail": {
+      "_说明": "掉线时用邮件把「验证链接 + 二维码」发到手机；不填就只在桌面弹窗/写文件",
+      "user": "YOUR_EMAIL@qq.com",
+      "to": "YOUR_EMAIL@qq.com",
+      "host": "smtp.qq.com",
+      "port": 465
+    }
+  }
 }

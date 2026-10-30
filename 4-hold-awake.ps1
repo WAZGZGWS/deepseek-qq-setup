@@ -1,6 +1,6 @@
 ﻿# Optional belt-and-braces: hold a system wake lock while this window is open.
 # Use it if Windows Update or the OEM utility keeps re-enabling sleep.
-# Run:  powershell -ExecutionPolicy Bypass -File "E:\1\qq-stack\4-hold-awake.ps1"
+# Run:  powershell -ExecutionPolicy Bypass -File "<STACK_ROOT>\4-hold-awake.ps1"
 # Stop: close the window or press Ctrl+C.
 
 $signature = @'
