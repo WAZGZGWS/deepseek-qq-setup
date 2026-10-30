@@ -205,6 +205,16 @@ async function checkOnce() {
       const from = decodeMime(headerField(header, 'From'));
       const subject = decodeMime(headerField(header, 'Subject'));
 
+      // 只认带前缀的指令邮件：主题以「命令:」开头，或者带 [指令]。
+      // 不然他一封普通回信里出现「重启」两个字就去重启主脑了。
+      if (!/^\s*(命令[:：]|\[指令\])/.test(subject)) {
+        st.seen.push({ uid, at: new Date().toISOString(), subject, act: '普通邮件（无指令前缀）' });
+        st.at = new Date().toISOString();
+        fs.writeFileSync(FILE, JSON.stringify(st, null, 2));
+        await imap.cmd(`UID STORE ${uid} +FLAGS (\\Seen)`);
+        continue;
+      }
+
       // 只认两个来源：你自己的邮箱（可能和机器人同一个），或者配置里 INBOX_OWNER_EMAIL
       const owners = [cfg.user, cfg.to, process.env.INBOX_OWNER_EMAIL].filter(Boolean).map((x) => String(x).toLowerCase());
       if (!owners.some((o) => from.toLowerCase().includes(o))) {
