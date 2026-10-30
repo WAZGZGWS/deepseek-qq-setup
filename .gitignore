@@ -45,3 +45,7 @@ budget-guard/quiet
 
 # æœºå™¨äºº QQ å¯†ç ï¼ˆDPAPI åŠ å¯†ï¼Œç»ä¸æäº¤ï¼‰
 qq-password.dat
+
+# ÓÊ¼şÊÚÈ¨Âë£¨DPAPI ¼ÓÃÜºóµÄÃÜÎÄÒ²²»Èë¿â£©
+qq-mail-auth.dat
+

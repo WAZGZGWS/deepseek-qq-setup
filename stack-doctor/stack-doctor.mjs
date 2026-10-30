@@ -516,6 +516,28 @@ function renderQrFile() {
   }
 }
 
+/**
+ * 用邮件把话说出去（QQ 之外的通道）。
+ *
+ * 场景：她掉线、要验证，这时候她在 QQ 上**一个字都发不出来**，桌面通知哥在上班也看不见。
+ * 邮件不依赖 QQ 登录状态，能落到手机上；验证链接在手机浏览器里就能点完。
+ * 没设授权码时安静失败，只在日志里说一句（不能因为邮件失败把巡检弄崩）。
+ */
+function mailOffline(subject, body) {
+  try {
+    const tool = path.join(ROOT, 'tools', 'notify-offline.mjs');
+    if (!fs.existsSync(tool)) return false;
+    const bodyFile = path.join(STATE_DIR, 'notify-body.txt');
+    fs.writeFileSync(bodyFile, String(body || '') + '\n', 'utf8');
+    execFileSync(process.execPath, [tool, `--subject=${subject}`, `--body-file=${bodyFile}`], {
+      encoding: 'utf8', windowsHide: true, timeout: 60000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   const state = loadState();
 
@@ -585,6 +607,10 @@ async function main() {
           if (Date.now() - st.alertedAt > ALERT_COOLDOWN_MS) {
             try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}
             desktopAlert(text);
+            // 她这时候说不了话（QQ 掉着），桌面通知哥也看不见 —— 用邮件把消息送到手机上。
+            // 链接在手机上就能完成验证：点开 → 收短信 → 填 → 后台的轮询会把她接回来。
+            const mailOk = mailOffline('【她掉线了】QQ 要验证，手机点链接就能救回来', text);
+            log(mailOk ? '已发邮件通知（QQ 外的通道）' : '邮件通知没发出去（检查 tools/set-mail-auth.cmd 有没有设过）');
             st.alertedAt = Date.now();
             st.alertedBy = 'QQ（NapCat）';
           }

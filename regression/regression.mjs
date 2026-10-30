@@ -304,6 +304,16 @@ check('余额告警在回升后会撤掉', () => {
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
   return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
 });
+check('掉线能用邮件找到哥（不依赖 QQ 的通道）', () => {
+  // 2026-10-30：她掉线时在 QQ 上一个字都发不出去，验证链接只能躺在电脑里，哥在上班就废了。
+  if (!fs.existsSync(path.join(ROOT, 'tools', 'notify-offline.mjs'))) return '缺少 tools/notify-offline.mjs';
+  if (!fs.existsSync(path.join(ROOT, 'tools', 'set-mail-auth.cmd'))) return '缺少 tools/set-mail-auth.cmd（没法设授权码）';
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  if (!/mailOffline/.test(doc)) return '巡检没接邮件通知';
+  const gi = fs.readFileSync(path.join(ROOT, '..', 'qq-bot-stack-os', '.gitignore'), 'utf8');
+  if (gi && !/qq-mail-auth\.dat/.test(gi)) return '.gitignore 没排除授权码文件';
+  return true;
+});
 check('扫码不用开 WebUI（本地画二维码 PNG）', () => {
   // 2026-10-30：哥说「扫码最麻烦」。麻烦的其实是开浏览器→输 token→找登录页；
   // 二维码内容就是个 URL，本地画成 PNG 直接扫屏幕就行。
