@@ -344,6 +344,12 @@ async function handle(state, name, up, restartFn, opts = {}) {
       try { fs.unlinkSync(ALERT_FILE); } catch {}
       s.alertedBy = '';
       s.alertedAt = 0;
+      // 发过「掉线」邮件的话，恢复时补一封「回来了」——
+      // 否则他不知道她是自己回来的，还是还躺着（一封邮件几分钱，换一个安心）。
+      if (label === 'QQ（NapCat）') {
+        const downMin = s.downSince ? Math.round((Date.now() - s.downSince) / 60000) : 0;
+        mailOffline('【她回来了】QQ 已恢复登录', `她已经重新登录了${downMin ? `，这次掉了 ${downMin} 分钟` : ''}。\n\n不用你做什么，消息照常回。`);
+      }
     }
     s.fails = 0;
     s.downSince = 0;

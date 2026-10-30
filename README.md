@@ -1,4 +1,4 @@
-# QQ Bot Stack
+﻿# QQ Bot Stack
 
 > 分享给那些愿意和我一样折腾的人。
 
@@ -606,7 +606,7 @@ QQ 掉线 → 判定要短信验证 → 后台守住验证链接 30 分钟
 配置（一次性）：
 
 ```bash
-# 1) QQ邮箱 → 设置 → 账户 → POP3/SMTP 服务 → 开启 → 生成 16 位授权码
+# 1) QQ邮箱（电脑网页版）→ 设置 → 账号与安全 → POP3/IMAP/SMTP/Exchange/CardDAV服务 → 开启 → 生成 16 位授权码
 # 2) 把授权码存起来（DPAPI 加密，不落明文）
 tools\set-mail-auth.cmd
 
