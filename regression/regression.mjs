@@ -770,6 +770,40 @@ check('急救员清场不误伤「本体」的锁', () => {
   return true;
 });
 
+check('主脑能拉起死掉的器官、救不活的脑就造一个新的', () => {
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  if (!/ORGAN_ENTRY/.test(b) || !/function spawnOrgan/.test(b)) bad.push('不会重拉眼/嘴/急救员');
+  if (!/function watchOrgans/.test(b)) bad.push('不看器官死活');
+  if (!/hemiGen/.test(b) || !/function reviveHemi/.test(b)) bad.push('不会造新脑');
+  if (!/import\(`\.\/hemis\/\$\{name\}\.mjs\?gen=/.test(b)) bad.push('造新脑没换模块实例（状态不会清零）');
+  if (!/hemiFail/.test(b)) bad.push('没有「几次救不回来才重造」的计数');
+  return bad.length === 0 || bad.join('；');
+});
+check('主脑自律：扫过的二维码框自己收掉', () => {
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  if (!/async function discipline/.test(b)) bad.push('没有自律逻辑');
+  if (!/qr-screen\.json/.test(b)) bad.push('不看扫码框开了多久');
+  if (!/关掉扫过的二维码框/.test(b)) bad.push('登录后不收扫码框');
+  const q = fs.readFileSync(path.join(ROOT, 'tools', 'qr-screen.mjs'), 'utf8');
+  if (!/qr-black\.ps1/.test(q)) bad.push('扫码黑屏没接上');
+  const ps = path.join(ROOT, 'tools', 'qr-black.ps1');
+  if (!fs.existsSync(ps)) bad.push('缺 qr-black.ps1');
+  else if (/[^\x00-\x7F]/.test(fs.readFileSync(ps, 'utf8'))) bad.push('qr-black.ps1 含非 ASCII（PS5.1 会解析失败）');
+  return bad.length === 0 || bad.join('；');
+});
+check('眼看到的东西会经嘴转述给主脑', () => {
+  const m = fs.readFileSync(path.join(ROOT, 'mouth', 'mouth.mjs'), 'utf8');
+  const bad = [];
+  if (!/eye-findings\.json/.test(m)) bad.push('嘴不读眼的报告');
+  if (!/eyeSaw/.test(m)) bad.push('报告里没有眼的内容');
+  if (!/转述眼/.test(m)) bad.push('日志里不转述');
+  const e = fs.readFileSync(path.join(ROOT, 'eye', 'eye.mjs'), 'utf8');
+  if (!/eye-findings\.json/.test(e)) bad.push('眼不写报告');
+  return bad.length === 0 || bad.join('；');
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {

@@ -41,6 +41,13 @@ function lastDecisionAt() {
   } catch { return 0; }
 }
 
+function eyeFindings() {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(STATE, 'eye-findings.json'), 'utf8'));
+    return Array.isArray(j.findings) ? j.findings.map((x) => x.code + ':' + (x.why || x.what || '')) : [];
+  } catch { return []; }
+}
+
 function inspect() {
   const now = Date.now();
   const brainPid = readPid(path.join(STATE, 'brain.lock'));
@@ -101,7 +108,9 @@ function inspect() {
   who.brain.lastDecisionAgeSec = lastDec ? Math.round((now - lastDec) / 1000) : null;
   if (brainAlive && lastDec && now - lastDec > 6 * 3600000) idle.push('主脑 6 小时没做过任何决策');
 
+  const eyeSaw = eyeFindings();
   const canWork = brainAlive && who.workers.running > 0;
+  const eyeTail = eyeSaw.length ? `，眼看到 ${eyeSaw.length} 条` : '';
   return {
     at: new Date(now).toISOString(),
     pid: process.pid,
@@ -109,7 +118,8 @@ function inspect() {
     dead,
     idle,
     who,
-    summary: `主脑${brainAlive ? '在' : '不在'}，worker ${running}/${ws.length} 能干活，死：${dead.length ? dead.join('/') : '无'}，摸鱼：${idle.length ? idle.join('/') : '无'}`,
+    eyeSaw,
+    summary: `主脑${brainAlive ? '在' : '不在'}，worker ${running}/${ws.length} 能干活，死：${dead.length ? dead.join('/') : '无'}，摸鱼：${idle.length ? idle.join('/') : '无'}${eyeTail}`,
   };
 }
 
@@ -148,12 +158,14 @@ async function main() {
           hemis: { left: r.who.left, right: r.who.right, cerebellum: r.who.cerebellum },
           organs: { eye: r.who.eye, medic: r.who.medic, hands: r.who.hands },
           summary: r.summary,
+          eyeSaw: r.eyeSaw,
         }, null, 2));
       } catch {}
-      const sig = `${r.dead.join(',')}|${r.idle.join(',')}|${r.canWork}`;
+      const sig = `${r.dead.join(',')}|${r.idle.join(',')}|${r.canWork}|${(r.eyeSaw || []).join(',')}`;
       if (sig !== lastSig) {
         lastSig = sig;
         log(`口报：${r.summary}`);
+        if (r.eyeSaw && r.eyeSaw.length) log('转述眼：' + r.eyeSaw.slice(0, 5).join(' / '));
       }
     } catch (e) { log('嘴出错：' + e.message); }
   };

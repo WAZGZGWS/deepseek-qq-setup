@@ -29,9 +29,12 @@ import { fileURLToPath } from 'node:url';
 import { ROOT, BRIDGE, STATE, stamp, portOpen } from './lib/base.mjs';
 import { singleInstance } from './lock/single.mjs';
 import { WORKER_NAMES } from './supervisor/workers.mjs';
-import * as left from './hemis/left.mjs';
-import * as right from './hemis/right.mjs';
-import * as cerebellum from './hemis/cerebellum.mjs';
+// 三个脑用动态 import：某个脑「救不活」时，主脑可以重建一个新的
+// （换个 ?gen= 参数就是全新的模块实例，状态清零、函数重新加载）。
+let hemiGen = { left: 0, right: 0, cerebellum: 0 };
+let left = await import('./hemis/left.mjs');
+let right = await import('./hemis/right.mjs');
+let cerebellum = await import('./hemis/cerebellum.mjs');
 import * as leftHand from './hands/left-hand.mjs';
 import * as rightHand from './hands/right-hand.mjs';
 
@@ -74,6 +77,7 @@ let napcatDownSince = 0;
 let lastOverrideAt = 0;
 let lastMaintainAt = 0;
 let lastHandAt = 0;
+let lastQrAt = 0;
 
 function log(msg) {
   const line = `[${stamp()}] ${msg}`;
@@ -714,6 +718,164 @@ function consumeHealQueue(now) {
   }
 }
 
+// ── 扫码黑屏：QQ 没登进去时，把大二维码直接糊到屏幕上 ─────────────
+
+const QR_PID = path.join(STATE, 'qr-screen.pid');
+
+function qrScreenPid() { try { return Number(fs.readFileSync(QR_PID, 'utf8').trim()) || 0; } catch { return 0; } }
+
+/** 3000 端口能拿到 user_id 才算「真登进去了」（WebUI 的 CheckLoginStatus 只代表它自己那路） */
+async function qqLoggedIn() {
+  try {
+    const r = await fetch('http://127.0.0.1:3000/get_login_info', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(5000),
+    });
+    const j = await r.json();
+    return !!(j && j.data && j.data.user_id);
+  } catch { return null; }
+}
+
+function runQrTool(args) {
+  try {
+    const c = spawn(process.execPath, [path.join(ROOT, 'tools', 'qr-screen.mjs'), ...args], {
+      cwd: ROOT, stdio: 'ignore', windowsHide: true, detached: true,
+    });
+    c.unref();
+    return true;
+  } catch { return false; }
+}
+
+/** QQ 没登录（码过期/被踢）→ 拉起黑屏二维码；其余器官一律不碰 */
+function ensureQrScreen(now) {
+  const pid = qrScreenPid();
+  if (pid && pidAlive(pid)) return;
+  if (now - lastQrAt < 60000) return;
+  lastQrAt = now;
+  if (runQrTool([])) decide('主脑-要扫码', '拉起黑屏二维码', '其余器官照常跑，只多一块扫码屏');
+}
+
+/** 登进去了 → 把扫码屏关掉（不关白占一个窗口） */
+function closeQrScreen(now) {
+  const pid = qrScreenPid();
+  if (!pid) return;
+  if (now - lastQrAt < 30000) return;
+  lastQrAt = now;
+  if (runQrTool(['--close'])) decide('主脑-扫码完成', '关掉黑屏二维码', '她登进去了');
+}
+
+// ── 器官管理：摸鱼/救不活的，重拉；彻底救不活的脑，造一个新的 ─────
+
+const ORGAN_ENTRY = {
+  eye: 'eye/eye.mjs',
+  medic: 'medic/medic.mjs',
+  mouth: 'mouth/mouth.mjs',
+  'qr-live': 'tools/qr-live.mjs',
+};
+const hemiFail = { left: 0, right: 0, cerebellum: 0 };
+const lastOrganAt = {};
+
+function spawnOrgan(name) {
+  const rel = ORGAN_ENTRY[name];
+  if (!rel) return false;
+  try {
+    const c = spawn(process.execPath, [path.join(ROOT, rel)], {
+      cwd: ROOT, stdio: 'ignore', windowsHide: true, detached: true,
+    });
+    c.unref();
+    return true;
+  } catch { return false; }
+}
+
+/** 造一个新的脑：换 ?gen= 拿到全新模块实例，旧的那个状态清零 */
+async function reviveHemi(name, why) {
+  try {
+    hemiGen[name] = (hemiGen[name] || 0) + 1;
+    const gen = hemiGen[name];
+    const mod = await import(`./hemis/${name}.mjs?gen=${gen}`);
+    if (name === 'left') left = mod;
+    else if (name === 'right') right = mod;
+    else if (name === 'cerebellum') cerebellum = mod;
+    hemis[name] = { status: 'online', errors: 0, violations: [], offlineUntil: 0, notes: [`第 ${gen} 代`], metrics: {}, at: Date.now() };
+    hemiFail[name] = 0;
+    decide('主脑-造新器官', `${name} 第 ${gen} 代`, why);
+    return true;
+  } catch (e) {
+    decide('主脑-造新器官失败', name, e.message);
+    return false;
+  }
+}
+
+/** 嘴说谁死了，主脑就去处理：小器官重拉，脑连续救不活就造新的 */
+async function watchOrgans(mouth, now) {
+  const dead = (mouth && mouth.dead) || [];
+  const idle = (mouth && mouth.idle) || [];
+
+  for (const name of ['eye', 'medic', 'mouth']) {
+    // 不能只信嘴：嘴自己死了就没人报它。所以直接看各器官的锁。
+    let lockPid = 0;
+    try { lockPid = Number(fs.readFileSync(path.join(STATE, `${name}.lock`), 'utf8').trim()) || 0; } catch {}
+    const deadByLock = !lockPid || !pidAlive(lockPid);
+    if (!dead.includes(name) && !deadByLock) continue;
+    if (now - (lastOrganAt[name] || 0) < 120000) continue;
+    lastOrganAt[name] = now;
+    if (spawnOrgan(name)) decide('主脑-重启器官', name, deadByLock ? '锁里的 pid 不在了' : '嘴报它不在');
+  }
+
+  for (const name of ['left', 'right', 'cerebellum']) {
+    if (!dead.includes(name)) continue;
+    const h = hemis[name] || {};
+    if (h.offlineUntil && now < h.offlineUntil) continue; // 冷却没到，先别抢
+    hemiFail[name] += 1;
+    if (hemiFail[name] >= 3) {
+      await reviveHemi(name, `连续 ${hemiFail[name]} 轮救不回来`);
+    } else {
+      h.status = 'online';
+      h.violations = [];
+      h.offlineUntil = 0;
+      decide('主脑-复活脑', name, `嘴报它下线（第 ${hemiFail[name]} 次）`);
+    }
+  }
+
+  // 摸鱼的 worker：锁僵住或者干脆没在跑，已经由右脑处理；这里只记一笔让它可查
+  for (const item of idle) {
+    if (!/worker/.test(item)) continue;
+    if (now - (lastOrganAt['worker-idle'] || 0) < 300000) break;
+    lastOrganAt['worker-idle'] = now;
+    decide('主脑-注意摸鱼', item, '嘴报');
+    break;
+  }
+}
+
+// ── 自律：没用的弹窗、扫过的二维码框，自己收掉 ──────────────────
+
+let lastDisciplineAt = 0;
+async function discipline(now, ports) {
+  if (now - lastDisciplineAt < 30000) return false;
+  lastDisciplineAt = now;
+  if (!ports.napcat) return false;
+  const li = await qqLoggedIn();
+  if (li === true) {
+    // 已经登进去了：扫码框一律没有存在意义
+    if (qrScreenPid()) { runQrTool(['--close']); decide('主脑-自律', '关掉扫过的二维码框', '已经登进去了'); }
+    try { fs.unlinkSync(path.join(STATE, 'qr-black.json')); } catch {}
+    return true;
+  }
+  if (li === false) {
+    // 一直没登录、也没人扫：开了 20 分钟就收掉，别赖在屏幕上挡事
+    let st = {};
+    try { st = JSON.parse(fs.readFileSync(path.join(STATE, 'qr-screen.json'), 'utf8')); } catch {}
+    if (st.openedAt && now - Date.parse(st.openedAt) > 20 * 60000) {
+      runQrTool(['--close']);
+      decide('主脑-自律', '关掉没用的扫码框', '开了 20 分钟没人扫');
+      return true;
+    }
+  }
+  return false;
+}
+
 async function reviewCycle() {
   const now = Date.now();
   let ports = { napcat: false, bridge: false };
@@ -722,6 +884,14 @@ async function reviewCycle() {
 
   if (ports.napcat) { napcatUpAt = now; napcatDownSince = 0; }
   else if (!napcatDownSince) napcatDownSince = now;
+
+  // 码过期 / 被踢：只要 NapCat 还在、QQ 没登进去，就把黑屏二维码糊到屏幕上。
+  // 只多这一块屏，worker、桥接、其他的脑一律照常跑。
+  if (ports.napcat) {
+    const li = await qqLoggedIn();
+    if (li === false) ensureQrScreen(now);
+    else if (li === true) closeQrScreen(now);
+  }
 
   const lv = evaluateLeft(now, ports);
 
@@ -817,6 +987,8 @@ async function reviewCycle() {
   lastStack = { napcat: ports.napcat, bridge: ports.bridge };
   consumeHealQueue(now);
   const mouth = readMouth(now);
+  await watchOrgans(mouth, now);
+  await discipline(now, ports);
   await maintain(now, lv);
   await maybeAlertHemis(now);
   writeStatus({ napcat: ports.napcat, bridge: ports.bridge, mouth });

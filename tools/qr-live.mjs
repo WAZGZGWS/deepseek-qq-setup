@@ -109,12 +109,20 @@ tick(); setInterval(tick, 3000);
 </script>`;
 }
 
+// 页面被打开过几次：主脑据此确认「黑屏真的亮起来了」，而不是只看拉没拉起进程
+let pageHits = 0;
+let lastHitAt = 0;
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       return res.end(page());
+    }
+    if (url.pathname === '/hits') {
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end(JSON.stringify({ hits: pageHits, lastHitAt }));
     }
     if (url.pathname === '/status') {
       // 二维码超过 90 秒就自动刷新（页面每 3 秒问一次，相当于有人看着）
