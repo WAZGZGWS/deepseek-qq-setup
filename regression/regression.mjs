@@ -310,6 +310,7 @@ check('掉线能用邮件找到哥（不依赖 QQ 的通道）', () => {
   if (!fs.existsSync(path.join(ROOT, 'tools', 'set-mail-auth.cmd'))) return '缺少 tools/set-mail-auth.cmd（没法设授权码）';
   const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
   if (!/mailOffline/.test(doc)) return '巡检没接邮件通知';
+  if (!/smsLink/.test(doc) || !/qrUrl/.test(doc)) return '掉线邮件不是二合一（缺短信链接或二维码）';
   const notifier = fs.readFileSync(path.join(ROOT, 'tools', 'notify-offline.mjs'), 'utf8');
   if (!/--attach|attachPath/.test(notifier)) return '通知工具不支持附件（二维码图片发不出去）';
   const gi = fs.readFileSync(path.join(ROOT, '..', 'qq-bot-stack-os', '.gitignore'), 'utf8');

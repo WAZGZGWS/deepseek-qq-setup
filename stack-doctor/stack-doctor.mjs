@@ -594,29 +594,21 @@ async function main() {
         if (e.status === 2 || e.status === 3) {
           const waitH = Number(process.env.HUMAN_WAIT_H || 6);
           st.pausedUntil = Date.now() + waitH * 3600 * 1000;
-          let text;
-          let qrAttach = '';   // 二维码 PNG 路径（新设备那种情况才有），给邮件当附件
-          if (e.status === 2) {
-            // 2026-10-29 踩的坑：验证链接跟「这一次」密码请求的 sid 绑定，脚本一退出链接就作废。
-            // 那天哥点链接时链接早死了，来回折腾三次。
-            // 现在改成：再起一个后台登录进程，带着 30 分钟轮询等人验证，
-            // 并把链接落到 state/qq-verify-link.txt（桌面通知里也带上）。
-            const link = await startVerifyPoller(qqLogin);
-            text = link
-              ? `QQ 需要短信/验证码验证（自动重试已暂停）。\n\n链接（30 分钟内有效，后台在等你验证）：\n${link}\n\n已写入 state/qq-verify-link.txt`
-              : 'QQ 登录需要短信/验证码验证，自动重试已暂停。\n\n打开 NapCat WebUI（http://127.0.0.1:6099）完成验证，或用手机登录这个号后扫码。';
-          } else {
-            const qrPath = renderQrFile();
-            let qrUrl = '';
-            try { qrUrl = String(fs.readFileSync(path.join(STATE_DIR, 'napcat-qrcode.txt'), 'utf8')).trim().split('\n')[0]; } catch {}
-            text = qrPath
-              ? `QQ 把这次登录判成「新设备」，需要扫码（自动重试已暂停）。\n\n` +
-                (qrUrl ? `① 手机上直接点这条（等于扫码，会唤起 QQ 让你确认）：\n${qrUrl}\n\n` : '') +
-                `② 或者用旁边的平板/另一台手机扫邮件里的二维码图片。\n\n二维码也画在本机：${qrPath}\n\n后台会自动重试，你确认后她会自己回来。`
-              : 'QQ 把这次登录判成「新设备」，需要扫码验证，自动重试已暂停。\n\n用登录着这个号的手机扫码（NapCat WebUI 里有二维码）。';
-            // 邮件里带上二维码图片：旁边有设备就能扫；手机点链接也算“扫码”
-            qrAttach = qrPath;
-          }
+          // 二合一：**一封邮件里同时给**「短信验证链接」和「二维码」，哪个来得及用哪个。
+          // 哥在上班，没法来回要好几次；短信链接有 30 分钟窗口，二维码只有几分钟，
+          // 所以正文里明确写清谁能撑多久。
+          const smsLink = e.status === 2 ? await startVerifyPoller(qqLogin) : '';
+          const qrPath = renderQrFile();
+          let qrUrl = '';
+          try { qrUrl = String(fs.readFileSync(path.join(STATE_DIR, 'napcat-qrcode.txt'), 'utf8')).trim().split('\n')[0]; } catch {}
+          const parts = [];
+          parts.push(e.status === 2 ? 'QQ 要短信验证（自动重试已暂停）。' : 'QQ 判「新设备」，要扫码（自动重试已暂停）。');
+          if (smsLink) parts.push(`① 短信验证（30 分钟内有效，**推荐**）：\n${smsLink}\n→ 点开、收验证码、填进去；后台正在等她回来。`);
+          if (qrUrl) parts.push(`② 扫码（二维码几分钟就过期，赶不上就用①）：\n${qrUrl}\n→ 有另一台设备就用相机扫；没有就直接点这条，通常会唤起 QQ 让你确认。`);
+          if (qrPath) parts.push(`二维码图片在附件里（本机也留了一份：${qrPath}）。`);
+          if (!smsLink && !qrUrl) parts.push('两种都没拿到：打开 NapCat WebUI（http://127.0.0.1:6099）手动处理。');
+          const text = parts.join('\n\n');
+          const qrAttach = qrPath;
           if (Date.now() - st.alertedAt > ALERT_COOLDOWN_MS) {
             try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}
             desktopAlert(text);
