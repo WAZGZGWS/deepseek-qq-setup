@@ -78,6 +78,7 @@ let lastOverrideAt = 0;
 let lastMaintainAt = 0;
 let lastHandAt = 0;
 let lastQrAt = 0;
+let lastResources = [];
 
 function log(msg) {
   const line = `[${stamp()}] ${msg}`;
@@ -167,6 +168,7 @@ function writeStatus(extra = {}) {
     quarantineSec: w.quarantineUntil > now ? Math.round((w.quarantineUntil - now) / 1000) : 0,
     broken: w.brokenUntil > now ? w.brokenWhy || '坏依赖' : '',
   }));
+  if (Array.isArray(extra.resources) && extra.resources.length) lastResources = extra.resources;
   const data = {
     at: new Date().toISOString(),
     pid: process.pid,
@@ -190,6 +192,7 @@ function writeStatus(extra = {}) {
       },
       conflicts: conflicts.slice(-5),
     },
+    resources: extra.resources !== undefined ? extra.resources : lastResources,
     recentDecisions: decisions.slice(-5),
     ...extra,
   };
@@ -207,6 +210,10 @@ function printStatus() {
   console.log(`主脑 pid=${d.pid}  更新于 ${new Date(d.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
   console.log(`  NapCat:${d.napcat ? '通' : '断'}  桥接:${d.bridge ? '通' : '断'}`);
   if (d.mouth && d.mouth.summary) console.log('  嘴报：' + d.mouth.summary);
+  if (Array.isArray(d.resources) && d.resources.length) {
+    const top = [...d.resources].sort((a, b) => b.rssMb - a.rssMb).slice(0, 3);
+    console.log('  占用：' + top.map((x) => x.role + ' ' + x.rssMb + 'MB/' + x.cpuPct + '%').join('  '));
+  }
   const h = d.hemis || {};
   if (h.left) console.log(`  左脑(安全):${h.left.status}${h.left.notes && h.left.notes.length ? '  ' + h.left.notes.join(' / ') : ''}`);
   if (h.cerebellum) console.log(`  小脑(记忆/余额):${h.cerebellum.status}${h.cerebellum.offlineSec ? `  （自己下线 ${Math.ceil(h.cerebellum.offlineSec / 60)} 分钟）` : ''}${h.cerebellum.metrics && h.cerebellum.metrics.balance ? `  余额 ${h.cerebellum.metrics.balance}` : ''}`);
@@ -876,6 +883,146 @@ async function discipline(now, ports) {
   return false;
 }
 
+// ── 资源占用：自己看、自己降，不动别的脑 ─────────────────────────
+
+const RSS_WARN_MB = Number(process.env.BRAIN_RSS_WARN_MB || 320);      // 超了先降优先级
+const RSS_THROTTLE_MB = Number(process.env.BRAIN_RSS_ORGAN_MB || 200); // 眼/嘴/急救员这么小还超 → 重拉
+const RSS_RESTART_MB = Number(process.env.BRAIN_RSS_RESTART_MB || 600); // worker 涨到这就不客气了
+const CPU_WARN_PCT = Number(process.env.BRAIN_CPU_WARN_PCT || 25);     // 连续两次超 → 降优先级
+const rssState = new Map();   // pid -> { name, role, rssMb, cpuSec }
+const cpuStreak = new Map();  // role -> 连续超阈值次数
+const throttled = new Set();  // 被降过优先级的 role
+let lastResSampleAt = 0;
+
+/** 一次采样：node / 浏览器 / powershell 的 CPU 秒数与内存（PS 5.1 的 Get-Process 够用） */
+function sampleProcesses() {
+  try {
+    const out = execFileSync('powershell', ['-NoProfile', '-Command',
+      "Get-Process -Name node,msedge,powershell -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,CPU,WorkingSet64 | ConvertTo-Json -Compress"],
+      { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+    const raw = JSON.parse(out.trim() || '[]');
+    const list = Array.isArray(raw) ? raw : [raw];
+    return list.map((r) => ({
+      pid: Number(r.Id),
+      name: String(r.ProcessName || ''),
+      cpuSec: Number(r.CPU) || 0,
+      rssMb: Math.round((Number(r.WorkingSet64) || 0) / 1048576),
+    }));
+  } catch { return []; }
+}
+
+function setPriority(pid, level) {
+  try {
+    const cmd = level === 'Idle'
+      ? `(Get-Process -Id ${pid} -ErrorAction Stop).PriorityClass = 'Idle'; 'ok'`
+      : `(Get-Process -Id ${pid} -ErrorAction Stop).PriorityClass = 'Normal'; 'ok'`;
+    execFileSync('powershell', ['-NoProfile', '-Command', cmd], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * 启动时把优先级还原：Idle 是「当时占用高」才降的，进程重启/主脑重启后不该一直压着。
+ * 不还原的话，被降过一次的 worker 会永远跑在 Idle 里 —— 那叫「降占用」还是「降效率」？
+ */
+function resetPriorities(why) {
+  const roles = roleMap();
+  let n = 0;
+  for (const [pid, role] of roles) {
+    if (role === 'brain') continue;
+    if (setPriority(pid, 'Normal')) n += 1;
+  }
+  throttled.clear();
+  if (n) decide('主脑-恢复占用', '启动时还原优先级', why || `${n} 个进程回到 Normal`);
+}
+
+/** role 表：谁是谁。只认自己拉起来的和几个器官，不碰桥接/QQ。 */
+function roleMap() {
+  const m = new Map();
+  m.set(process.pid, 'brain');
+  for (const w of workers) if (w.child && w.child.pid) m.set(w.child.pid, 'worker:' + w.name);
+  for (const o of ['eye', 'medic', 'mouth']) {
+    const pid = (() => { try { return Number(fs.readFileSync(path.join(STATE, `${o}.lock`), 'utf8').trim()) || 0; } catch { return 0; } })();
+    if (pid) m.set(pid, 'organ:' + o);
+  }
+  return m;
+}
+
+/**
+ * 自律·资源：每 60 秒采一次。
+ *   · 超过内存/CPU 阈值 → 先把那个进程的优先级降成 Idle（立刻见效、不打断它）
+ *   · 眼/嘴/急救员这种小东西还涨到 200MB → 判定漏了，重拉一份
+ *   · worker 涨到 600MB → 让右脑重启它（主脑动手，记一笔）
+ *   · 占用回落到阈值一半以下 → 优先级还原，别一直压着它
+ */
+async function watchResources(now) {
+  if (now - lastResSampleAt < 60000) return;
+  const prev = new Map(rssState);
+  lastResSampleAt = now;
+  const rows = sampleProcesses();
+  if (!rows.length) return;
+  const roles = roleMap();
+  const keep = [];
+  const dtSec = 60;
+
+  for (const r of rows) {
+    const role = roles.get(r.pid);
+    if (!role) continue;
+    const before = prev.get(r.pid);
+    const cpuPct = before ? Math.max(0, Math.round(((r.cpuSec - before.cpuSec) / dtSec) * 100)) : 0;
+    rssState.set(r.pid, { ...r, role, cpuPct });
+    keep.push({ role, pid: r.pid, rssMb: r.rssMb, cpuPct });
+  }
+  // 清掉已经不在的 pid
+  for (const pid of [...rssState.keys()]) if (!rows.some((r) => r.pid === pid)) rssState.delete(pid);
+
+  for (const k of keep) {
+    const role = k.role;
+    const hot = k.rssMb > RSS_WARN_MB || k.cpuPct > CPU_WARN_PCT;
+    const streak = hot ? (cpuStreak.get(role) || 0) + 1 : 0;
+    cpuStreak.set(role, streak);
+
+    // 高占用：降优先级（连续两次才算，避免把偶发的一次抖动当问题）
+    if (hot && streak >= 2 && !throttled.has(role)) {
+      if (setPriority(k.pid, 'Idle')) {
+        throttled.add(role);
+        decide('主脑-降占用', role, `内存 ${k.rssMb}MB / CPU ${k.cpuPct}% → 优先级降到 Idle`);
+      }
+    }
+
+    // 回落：还原优先级
+    if (!hot && throttled.has(role) && streak === 0) {
+      if (setPriority(k.pid, 'Normal')) {
+        throttled.delete(role);
+        decide('主脑-恢复占用', role, `回落到 ${k.rssMb}MB / ${k.cpuPct}%，优先级还原`);
+      }
+    }
+
+    // 小器官漏了：直接重拉（它们本身很轻）
+    if (role.startsWith('organ:') && k.rssMb > RSS_THROTTLE_MB) {
+      const name = role.slice(6);
+      if (now - (lastOrganAt[name] || 0) > 120000) {
+        lastOrganAt[name] = now;
+        try { execFileSync('taskkill', ['/PID', String(k.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 8000 }); } catch {}
+        spawnOrgan(name);
+        decide('主脑-降占用', role, `涨到 ${k.rssMb}MB，重拉一份`);
+      }
+    }
+
+    // worker 涨太大：杀掉让右脑/主脑补拉（先记录，别杀桥接和 QQ）
+    if (role.startsWith('worker:') && k.rssMb > RSS_RESTART_MB) {
+      const name = role.slice(7);
+      const w = workers.find((x) => x.name === name);
+      if (w && w.child && w.child.exitCode === null) {
+        decide('主脑-降占用', role, `涨到 ${k.rssMb}MB，重启这个 worker`);
+        try { w.child.kill(); } catch {}
+      }
+    }
+  }
+
+  return keep;
+}
+
 async function reviewCycle() {
   const now = Date.now();
   let ports = { napcat: false, bridge: false };
@@ -988,10 +1135,11 @@ async function reviewCycle() {
   consumeHealQueue(now);
   const mouth = readMouth(now);
   await watchOrgans(mouth, now);
+  const res = await watchResources(now);
   await discipline(now, ports);
   await maintain(now, lv);
   await maybeAlertHemis(now);
-  writeStatus({ napcat: ports.napcat, bridge: ports.bridge, mouth });
+  writeStatus({ napcat: ports.napcat, bridge: ports.bridge, mouth, resources: res || [] });
 }
 
 /** 两个脑都下线 = 只剩保命：写告警，但不发邮件（邮件是掉线专用通道，别滥用） */
@@ -1031,6 +1179,7 @@ async function main() {
   if (!workers.length) { log('注册表读不出任何 worker，退出'); process.exitCode = 1; return; }
 
   for (const w of workers) { killOrphan(w.name); start(w); }
+  setTimeout(() => { try { resetPriorities('主脑刚起来，把继承下来的 Idle 还原'); } catch {} }, 5000);
   await reviewCycle().catch((e) => log('首轮仲裁出错：' + e.message));
 
   const writeTimer = setInterval(() => { if (!stopping) writeStatus(); }, 20000);

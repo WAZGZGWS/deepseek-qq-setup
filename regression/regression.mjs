@@ -804,6 +804,37 @@ check('眼看到的东西会经嘴转述给主脑', () => {
   return bad.length === 0 || bad.join('；');
 });
 
+check('主脑看占用、超阈值就降优先级', () => {
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  if (!/function sampleProcesses/.test(b)) bad.push('不采样进程占用');
+  if (!/WorkingSet64/.test(b) || !/\.CPU/.test(b)) bad.push('不读内存/CPU');
+  if (!/function setPriority/.test(b)) bad.push('不会改优先级');
+  if (!/PriorityClass = 'Idle'/.test(b)) bad.push('降占用不是真降优先级');
+  if (!/function watchResources/.test(b)) bad.push('没有占用巡查');
+  if (!/RSS_WARN_MB/.test(b) || !/CPU_WARN_PCT/.test(b)) bad.push('没有阈值');
+  if (!/主脑-降占用/.test(b)) bad.push('降占用不留痕');
+  return bad.length === 0 || bad.join('；');
+});
+check('降占用不长期压着：能回落、能还原', () => {
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  if (!/主脑-恢复占用/.test(b)) bad.push('回落后不还原优先级');
+  if (!/function resetPriorities/.test(b)) bad.push('主脑重启后不还原继承下来的 Idle');
+  if (!/throttled\.delete/.test(b)) bad.push('还原后不记录状态');
+  return bad.length === 0 || bad.join('；');
+});
+check('降占用只碰自己的器官，不碰桥接和 QQ', () => {
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const start = b.indexOf('function roleMap()');
+  const block = start >= 0 ? b.slice(start, start + 900) : '';
+  const bad = [];
+  if (!block) bad.push('找不到 roleMap（怕它把 QQ 也纳进来了）');
+  else if (/QQ\.exe|bridge\.js/.test(block)) bad.push('roleMap 把 QQ/桥接也算进降占用对象');
+  if (/bridge/i.test(block) && /worker:/.test(block)) { /* 允许注释里提桥接 */ }
+  return bad.length === 0 || bad.join('；');
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {
