@@ -78,6 +78,8 @@ let napcatDownSince = 0;
 let lastOverrideAt = 0;
 let lastMaintainAt = 0;
 let lastHandAt = 0;
+let lastStuckFixAt = 0;
+let lastMoneyNoteAt = 0;
 let lastQrAt = 0;
 let lastResources = [];
 
@@ -780,6 +782,11 @@ const ORGAN_ENTRY = {
   eye: 'eye/eye.mjs',
   medic: 'medic/medic.mjs',
   mouth: 'mouth/mouth.mjs',
+  blackbox: 'blackbox/blackbox.mjs',
+  vitals: 'vitals/vitals.mjs',
+  treasurer: 'treasurer/treasurer.mjs',
+  hippocampus: 'hippocampus/hippocampus.mjs',
+  ears: 'ears/ears.mjs',
   'qr-live': 'tools/qr-live.mjs',
 };
 const hemiFail = { left: 0, right: 0, cerebellum: 0 };
@@ -821,7 +828,7 @@ async function watchOrgans(mouth, now) {
   const dead = (mouth && mouth.dead) || [];
   const idle = (mouth && mouth.idle) || [];
 
-  for (const name of ['eye', 'medic', 'mouth']) {
+  for (const name of ['eye', 'medic', 'mouth', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears']) {
     // 不能只信嘴：嘴自己死了就没人报它。所以直接看各器官的锁。
     let lockPid = 0;
     try { lockPid = Number(fs.readFileSync(path.join(STATE, `${name}.lock`), 'utf8').trim()) || 0; } catch {}
@@ -942,7 +949,7 @@ function roleMap() {
   const m = new Map();
   m.set(process.pid, 'brain');
   for (const w of workers) if (w.child && w.child.pid) m.set(w.child.pid, 'worker:' + w.name);
-  for (const o of ['eye', 'medic', 'mouth']) {
+  for (const o of ['eye', 'medic', 'mouth', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears']) {
     const pid = (() => { try { return Number(fs.readFileSync(path.join(STATE, `${o}.lock`), 'utf8').trim()) || 0; } catch { return 0; } })();
     if (pid) m.set(pid, 'organ:' + o);
   }
@@ -1185,6 +1192,23 @@ async function reviewCycle() {
       }
       try { leftHand.emptyTrash(ROOT, 30); } catch {}
     } catch (e) { log('左手出错：' + e.message); }
+  }
+
+  // 体温计说「有人说话但她没回」→ 主脑重启桥接（15 分钟最多一次）
+  let va = null;
+  try { va = JSON.parse(fs.readFileSync(path.join(STATE, 'vitals-alert.json'), 'utf8')); } catch {}
+  if (va && va.stuck && now - lastStuckFixAt > 15 * 60 * 1000) {
+    lastStuckFixAt = now;
+    const r = spawnBridge();
+    decide('主脑-假在线', r.ok ? '重启桥接（她说不出话）' : '重启桥接失败', va.why || '有未读没回');
+  }
+
+  // 钱包管家：预计快烧完 → 记一笔（降档它自己已经做了）
+  let ta = null;
+  try { ta = JSON.parse(fs.readFileSync(path.join(STATE, 'treasurer-alert.json'), 'utf8')); } catch {}
+  if (ta && ta.warned && now - lastMoneyNoteAt > 3600 * 1000) {
+    lastMoneyNoteAt = now;
+    decide('主脑-钱包', '预计快没钱了，已进省聊', ta.why || `余额 ${ta.balance}`);
   }
 
   lastStack = { napcat: ports.napcat, bridge: ports.bridge };

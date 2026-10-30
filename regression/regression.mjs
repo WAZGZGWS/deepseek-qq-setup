@@ -874,6 +874,65 @@ check('喜悦：连续正常一周才激励，而且有免检期', () => {
   return bad.length === 0 || bad.join('；');
 });
 
+check('黑匣子：一直录，出事才写事故报告', () => {
+  const f = path.join(ROOT, 'blackbox', 'blackbox.mjs');
+  if (!fs.existsSync(f)) return '缺 blackbox/blackbox.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/blackbox\.jsonl/.test(t)) bad.push('不录环形快照');
+  if (!/archive', 'incidents/.test(t)) bad.push('不落事故报告');
+  if (!/function problems/.test(t)) bad.push('不判断什么算问题');
+  if (!/:3000|bridge/.test(t)) bad.push('不看端口');
+  return bad.length === 0 || bad.join('；');
+});
+check('体温计：判断「有人说话但她没回」', () => {
+  const f = path.join(ROOT, 'vitals', 'vitals.mjs');
+  if (!fs.existsSync(f)) return '缺 vitals/vitals.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/api\/socialV2\/state/.test(t)) bad.push('不问桥接状态');
+  if (!/unreadCount/.test(t)) bad.push('不看未读');
+  if (!/lastAiReplyAt/.test(t)) bad.push('不看最后回话时间');
+  if (!/vitals-alert\.json/.test(t)) bad.push('卡住不上报主脑');
+  if (!/get_login_info/.test(t)) bad.push('不看 QQ 是否在线');
+  return bad.length === 0 || bad.join('；');
+});
+check('钱包管家：算烧速和还能撑多久，提前降档', () => {
+  const f = path.join(ROOT, 'treasurer', 'treasurer.mjs');
+  if (!fs.existsSync(f)) return '缺 treasurer/treasurer.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/burnPerHour/.test(t)) bad.push('不算燃烧速率');
+  if (!/etaHours/.test(t)) bad.push('不算还能撑多久');
+  if (!/cerebellum-policy\.json/.test(t)) bad.push('不会提前降档');
+  if (!/treasurer-alert\.json/.test(t)) bad.push('不提醒主脑');
+  if (!/samples/.test(t)) bad.push('不自己记历史（只靠别人的快照）');
+  return bad.length === 0 || bad.join('；');
+});
+check('海马体：记忆会忘，但忘得讲规矩', () => {
+  const f = path.join(ROOT, 'hippocampus', 'hippocampus.mjs');
+  if (!fs.existsSync(f)) return '缺 hippocampus/hippocampus.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/TOPIC_FORGET_DAYS = 30/.test(t)) bad.push('话题没有 30 天遗忘线');
+  if (!/FACT_REVIEW_DAYS = 90/.test(t)) bad.push('事实没有 90 天复核线');
+  if (!/MAX_FORGET_PER_RUN/.test(t)) bad.push('一次忘太多');
+  if (!/rightHand\.apply/.test(t)) bad.push('不走右手（没有备份）');
+  return bad.length === 0 || bad.join('；');
+});
+check('耳朵：把你的回信变成白名单指令', () => {
+  const f = path.join(ROOT, 'ears', 'ears.mjs');
+  if (!fs.existsSync(f)) return '缺 ears/ears.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/imap\.qq\.com|IMAP/.test(t)) bad.push('不收信');
+  if (!/INBOX_OWNER_EMAIL|owners/.test(t)) bad.push('不限制发件人（谁都能指挥）');
+  if (!/SEARCH UNSEEN/.test(t)) bad.push('只看未读');
+  if (!/--selftest/.test(t)) bad.push('没有自测');
+  if (!/mailN < 6|used < 6/.test(t)) bad.push('回信不设上限');
+  return bad.length === 0 || bad.join('；');
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {
