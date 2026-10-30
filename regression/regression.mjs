@@ -594,19 +594,21 @@ check('开机脚本跑主脑，且锁冲突时不空转', () => {
 
 check('主脑自己会拿主意（不是只会重启）', () => {
   // 每一条都对应真出过的事：卡死、反复崩、坏依赖、桥接断、巡检停、日志涨爆、孤儿锁。
+  // 拆成三脑后，判据分散在 brain.mjs 和 hemis/right.mjs 里 —— 两边都要有。
   const t = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const r = fs.readFileSync(path.join(ROOT, 'hemis', 'right.mjs'), 'utf8');
   const bad = [];
   const need = [
-    ['function decide(', '没有决策记录'],
-    [/quarantineUntil/, '反复崩不隔离'],
-    [/Cannot find module/, '坏依赖不识别'],
-    [/HUNG_LOCK_SEC/, '卡死不重启'],
-    [/function startBridge\(/, '桥接断了不拉起'],
-    [/function ensureDoctor\(/, '巡检停了不管'],
-    [/function trimLogs\(/, '日志涨爆不裁剪'],
-    [/function killOrphan\(/, '孤儿锁不回收'],
+    [t, 'function decide(', '没有决策记录'],
+    [t, /quarantineUntil/, '反复崩不隔离'],
+    [t, /Cannot find module/, '坏依赖不识别'],
+    [r, /lockAgeSec > 180/, '卡死不重启'],
+    [r, /start-bridge/, '桥接断了不拉起'],
+    [r, /run-doctor/, '巡检停了不管'],
+    [t, /function trimLogs\(/, '日志涨爆不裁剪'],
+    [t, /function killOrphan\(/, '孤儿锁不回收'],
   ];
-  for (const [re, why] of need) if (!(re instanceof RegExp ? re.test(t) : t.includes(re))) bad.push(why);
+  for (const [src, re, why] of need) if (!(re instanceof RegExp ? re.test(src) : src.includes(re))) bad.push(why);
   if (!/--decisions/.test(t)) bad.push('没有 --decisions（出事了查不了它当时怎么想的）');
   return bad.length === 0 || bad.join('；');
 });
@@ -633,6 +635,61 @@ check('主脑默认开机自启', () => {
   }
   if (bad.length === 0) return true;
   return bad.join('；');
+});
+
+check('三脑各管一摊，主脑仲裁', () => {
+  // 左脑=安全/封号，右脑=运行逻辑，小脑=记忆/输出/余额，谁都不能越权直接动手。
+  const bad = [];
+  const L = path.join(ROOT, 'hemis', 'left.mjs');
+  const R = path.join(ROOT, 'hemis', 'right.mjs');
+  const C = path.join(ROOT, 'hemis', 'cerebellum.mjs');
+  for (const [f, why] of [[L, '左脑'], [R, '右脑'], [C, '小脑']]) if (!fs.existsSync(f)) bad.push('缺' + why);
+  if (bad.length) return bad.join('；');
+
+  const l = fs.readFileSync(L, 'utf8');
+  if (!/LOGIN_CAP/.test(l)) bad.push('左脑没有登录次数闸门');
+  if (!/23:00|night/.test(l)) bad.push('左脑没有夜间闸门');
+  if (!/group-message/.test(l)) bad.push('左脑不管群消息');
+  if (!/SAFE_DEFAULT/.test(l)) bad.push('左脑没有「它自己坏了」的保守策略');
+
+  const r = fs.readFileSync(R, 'utf8');
+  if (/spawn\(/.test(r)) bad.push('右脑自己动手了（应该只提 proposal）');
+  if (!/start-bridge/.test(r) || !/start-worker/.test(r)) bad.push('右脑不提运行提案');
+
+  const c = fs.readFileSync(C, 'utf8');
+  if (!/memory-tidy/.test(c)) bad.push('小脑不管记忆整理');
+  if (!/run-memory-summary/.test(c)) bad.push('小脑不管每天摘要');
+  if (!/send-mail/.test(c)) bad.push('小脑不管余额提醒');
+  if (!/save-mode/.test(c)) bad.push('小脑不管省着聊');
+
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  if (!/function gate\(/.test(b)) bad.push('主脑没有闸门');
+  if (!/noteConflict/.test(b)) bad.push('主脑不记冲突');
+  if (!/自己下线/.test(b)) bad.push('冲突后不会自己下线');
+  if (!/hemis\/cerebellum|hemis\/left|hemis\/right/.test(b)) bad.push('主脑没接三脑');
+  return bad.length === 0 || bad.join('；');
+});
+check('主脑接管 NapCat 和桥接（那两个快捷方式只是叫它起床）', () => {
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  if (!/function spawnBridge\(/.test(b)) bad.push('主脑不拉桥接');
+  if (!/function spawnNapcat\(/.test(b)) bad.push('主脑不拉 NapCat');
+  if (!/napcat-start\.mjs/.test(b)) bad.push('拉 NapCat 没走唯一入口');
+  for (const f of ['1-启动NapCat.bat', '2-启动桥接.bat']) {
+    const p = path.join(ROOT, f);
+    if (!fs.existsSync(p)) continue;
+    const t = fs.readFileSync(p, 'utf8');
+    if (!/20-supervisor\.bat/.test(t)) bad.push(f + ' 还在自己拉服务');
+    if (/src\\bridge\.js|launcher\.bat/.test(t)) bad.push(f + ' 里还有旧启动逻辑');
+  }
+  return bad.length === 0 || bad.join('；');
+});
+check('小脑的「省着聊」真的会被执行', () => {
+  const bw = path.join(ROOT, 'balance-watch', 'balance-watch.mjs');
+  if (!fs.existsSync(bw)) return '缺 balance-watch';
+  const t = fs.readFileSync(bw, 'utf8');
+  if (!/cerebellum-policy\.json/.test(t)) return 'balance-watch 不读小脑的省聊策略';
+  return true;
 });
 
 // ---- 输出 ----

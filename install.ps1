@@ -337,10 +337,15 @@ $bootArg = if ($BotQQ) { "-q $BotQQ" } else { '' }
 
 # NapCat 一律走 tools\napcat-start.mjs：它先看 :3000 和 QQ.exe 在不在，
 # 再拿单实例锁，才去拉 NapCat —— 两个实例抢同一个号会互相顶号（"刚登上就被踢"）。
-Write-Launcher '1-启动NapCat.bat' 'NapCat (QQ backend)' @"
+# NapCat 也归主脑：主脑发现 :3000 连续 3 轮没起来才提「拉一下」，而且要过左脑的登录预算闸门。
+Write-Launcher '1-启动NapCat.bat' 'NapCat (via brain)' @"
 cd /d "$TargetDir"
-rem Guarded start: refuses if port 3000 or QQ.exe is already there.
-"$nodeExe" "$TargetDir\tools\napcat-start.mjs" --as-user
+if exist "$TargetDir\run-hidden.vbs" (
+  start "" /min wscript.exe "$TargetDir\run-hidden.vbs" "$TargetDir\20-supervisor.bat"
+) else (
+  start "" /min cmd /c "$TargetDir\20-supervisor.bat"
+)
+exit /b 0
 "@
 
 Write-Launcher 'napcat-boot.bat' 'NapCat boot' @"
@@ -350,27 +355,16 @@ rem Guarded start (direct mode): used by scheduled tasks.
 exit /b 0
 "@
 
-Write-Launcher '2-启动桥接.bat' 'QQ Bridge' @"
-cd /d "$BridgeDir"
-if errorlevel 1 (
-  echo [X] cannot enter $BridgeDir
-  pause
-  exit /b 1
+# 桥接不再自己留一个 5 秒重启循环：主脑盯着 :3100，断了 20 秒内就拉起来。
+# 这个文件只为兼容老的快捷方式/计划任务 —— 它做的事就是「把主脑叫起来」。
+Write-Launcher '2-启动桥接.bat' 'QQ Bridge (via brain)' @"
+cd /d "$TargetDir"
+if exist "$TargetDir\run-hidden.vbs" (
+  start "" /min wscript.exe "$TargetDir\run-hidden.vbs" "$TargetDir\20-supervisor.bat"
+) else (
+  start "" /min cmd /c "$TargetDir\20-supervisor.bat"
 )
-netstat -ano | findstr /C:"127.0.0.1:3100" | findstr /C:"LISTENING" >nul 2>&1
-if not errorlevel 1 (
-  echo [i] port 3100 already in use - another bridge is running.
-  timeout /t 8 /nobreak >nul
-  exit /b 0
-)
-:loop
-"$nodeExe" src\bridge.js
-echo.
-echo [bridge] exited, restarting in 5s (Ctrl+C to stop)
-timeout /t 5 /nobreak >nul
-netstat -ano | findstr /C:"127.0.0.1:3100" | findstr /C:"LISTENING" >nul 2>&1
-if not errorlevel 1 exit /b 0
-goto loop
+exit /b 0
 "@
 
 Write-Launcher '20-supervisor.bat' 'QQ Bot Brain' @"

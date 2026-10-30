@@ -1,33 +1,26 @@
 #!/usr/bin/env node
 /**
- * brain —— 全栈主脑：一个入口管住所有后台脚本，并且**自己会拿主意**。
+ * brain —— 主脑：仲裁 + 执行。
  *
- * 它替掉原来分散的三处职责：supervisor（拉进程）+ stack-guard（守窗口）+
- * doctor 里的「worker 锁数量」判断 —— 现在统一到这里，看状态只有一条命令。
+ * 哥定的结构（2026-10-30）：
+ *   左脑 hemis/left.mjs    安全/封号：只回「账号动作能不能做」，外加它自己的安全动作
+ *   右脑 hemis/right.mjs   运行逻辑：只回「服务/worker 该怎么修」
+ *   主脑（本文件）          仲裁 + 执行：右脑的提案过左脑的闸门，冲突时右脑那一项下线；
+ *                          左脑自己坏了就用最严的静态策略（账号动作全禁）
  *
- * 为什么不是「把 9 个脚本塞进同一个进程」：
- *   9 个 worker 全是常驻定时任务，塞一个进程里的话——一个未捕获异常、一次内存泄漏、
- *   一个卡死的同步调用，就会让**全部 9 个一起死**（连巡检都没人跑）。
- *   所以主脑管的是「启动/守护/决策/状态/日志」，每个 worker 仍然独立进程跑，崩一个不连坐。
+ * 为什么要分两个脑，而不是一个文件里写两段 if：
+ *   「让服务活着」和「别把号搞没」是会互相顶的（QQ 掉了，右脑想立刻重登，左脑说今天次数到顶了）。
+ *   混在一起写，最后一定是「谁后改的那行代码赢」，出事了说不清是哪条规矩被越过。
+ *   分开之后：右脑永远只能提，左脑永远只能否，越权在结构上就不成立。
  *
- * 决策表（每一项都是真踩过才写的，不是设想）：
- *   1. worker 崩了            → 5 秒后重启；锁冲突（退出码 3）等 30 秒
- *   2. 同一个 worker 10 分钟内崩 4 次 → 隔离 10 分钟，写告警，别无限重试刷日志
- *   3. worker 活着但锁 180 秒没心跳 → 判定卡死，杀掉重启（卡在同步调用时就是这症状）
- *   4. worker 日志里 'Cannot find module' → 不重启了，标记坏依赖，隔离 30 分钟
- *   5. 缺文件                → 跳过并记一笔，不刷屏
- *   6. :3100 断、:3000 通    → 拉起桥接；15 分钟内失败 3 次就退避 10 分钟
- *   7. :3000 断              → 不硬来，交给巡检（它有登录次数预算/夜间静默那套规矩），
- *                              并确认巡检任务真的在跑（超过 10 分钟没跑就 /run 它）
- *   8. 旧 supervisor 复活    → 收掉（两边各拉一套 worker 会互相抢锁）
- *   9. 锁文件指向死进程      → 清掉
- *  10. 日志超过 8MB          → 只留最后 1500 行
+ * 九个 worker 仍然是独立进程（塞一个进程里，一个崩全崩）。
  *
  * 用法：
- *   node brain.mjs            前台运行（带守护 + 决策，开机由 20-supervisor.bat 拉起）
- *   node brain.mjs --status   只看状态（谁在跑、重启几次、多久没心跳、最近决策）
- *   node brain.mjs --decisions 最近 20 条决策（排查「它为什么动了手」）
- *   node brain.mjs --once     起一遍就退（调试用）
+ *   node brain.mjs            前台运行（开机由 20-supervisor.bat 拉起）
+ *   node brain.mjs --status   总状态 + 最近决策
+ *   node brain.mjs --hemis    两个脑现在什么状态、手里有什么规矩、最近几次冲突
+ *   node brain.mjs --decisions 最近 20 条决策
+ *   node brain.mjs --once     跑一轮就退（调试用）
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,41 +29,41 @@ import { fileURLToPath } from 'node:url';
 import { ROOT, BRIDGE, STATE, stamp, portOpen } from './lib/base.mjs';
 import { singleInstance } from './lock/single.mjs';
 import { WORKER_NAMES } from './supervisor/workers.mjs';
+import * as left from './hemis/left.mjs';
+import * as right from './hemis/right.mjs';
+import * as cerebellum from './hemis/cerebellum.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BRAIN_STATE = path.join(STATE, 'brain.json');
 const BRAIN_LOG = path.join(STATE, 'brain.log');
 const DEC_LOG = path.join(STATE, 'brain-decisions.jsonl');
 const SUP_LOCK = path.join(STATE, 'supervisor.lock');
+const RIGHT_STATE = path.join(STATE, 'right-brain.json');
 const STATUS_ONLY = process.argv.includes('--status');
+const HEMIS_ONLY = process.argv.includes('--hemis');
 const DECISIONS_ONLY = process.argv.includes('--decisions');
 const ONCE = process.argv.includes('--once');
 
-const PORTS = { napcat: 3000, bridge: 3100 };
-const QUARANTINE_MS = 10 * 60 * 1000;   // 反复崩 → 隔离 10 分钟
-const BROKEN_MS = 30 * 60 * 1000;       // 依赖缺失 → 隔离 30 分钟（等人工装，不自作主张 npm i）
-const CRASH_WINDOW_MS = 10 * 60 * 1000; // 10 分钟内崩 4 次算「反复崩」
+const QUARANTINE_MS = 10 * 60 * 1000;
+const BROKEN_MS = 30 * 60 * 1000;
+const CRASH_WINDOW_MS = 10 * 60 * 1000;
 const CRASH_LIMIT = 4;
-const HUNG_LOCK_SEC = 180;              // 锁 3 分钟不跳 = 卡死
 const LOG_MAX_BYTES = 8 * 1024 * 1024;
+const VIOLATION_WINDOW_MS = 10 * 60 * 1000;
+const VIOLATION_LIMIT = 3;          // 右脑 10 分钟内被否 3 次 → 它自己下线 15 分钟
+const RIGHT_OFFLINE_MS = 15 * 60 * 1000;
+const CONFLICT_KEEP = 10;
 
-const workers = [];   // { name, file, child, restarts, lastStart, lastExit, recentExits:[], quarantineUntil, brokenUntil, brokenWhy, restartTimer }
-const decisions = []; // 内存里最近 50 条，落盘另有一份 jsonl
-// 端口状态由 60 秒的 reviewStack 更新；20 秒的状态落盘要复用它，
-// 否则每次写盘都会把 napcat/bridge 写成 false，状态页看起来像「全断了」。
+const workers = [];
+const decisions = [];
+const conflicts = [];
+const hemis = {
+  left: { status: 'online', errors: 0, notes: [], metrics: {}, at: 0 },
+  right: { status: 'online', violations: [], offlineUntil: 0, notes: [], at: 0 },
+  cerebellum: { status: 'online', violations: [], offlineUntil: 0, notes: [], metrics: {}, at: 0 },
+};
 let lastStack = { napcat: false, bridge: false };
 let stopping = false;
-
-/** 决策日志：主脑每做一次“选择”都记一笔，事后能回答「它当时为什么这么干」 */
-function decide(rule, action, detail = '') {
-  const rec = { at: new Date().toISOString(), rule, action, detail };
-  decisions.push(rec);
-  if (decisions.length > 50) decisions.shift();
-  const line = `[${stamp()}] 决策 ${rule} → ${action}${detail ? '（' + detail + '）' : ''}`;
-  log(line);
-  try { fs.appendFileSync(DEC_LOG, JSON.stringify(rec) + '\n'); } catch {}
-  return rec;
-}
 
 function log(msg) {
   const line = `[${stamp()}] ${msg}`;
@@ -78,9 +71,17 @@ function log(msg) {
   try { fs.appendFileSync(BRAIN_LOG, line + '\n'); } catch {}
 }
 
-// ── 判活工具 ────────────────────────────────────────────────────────
+function decide(rule, action, detail = '') {
+  const rec = { at: new Date().toISOString(), rule, action, detail };
+  decisions.push(rec);
+  if (decisions.length > 50) decisions.shift();
+  log(`决策 ${rule} → ${action}${detail ? '（' + detail + '）' : ''}`);
+  try { fs.appendFileSync(DEC_LOG, JSON.stringify(rec) + '\n'); } catch {}
+  return rec;
+}
 
-/** worker 清单：name + 入口文件（沿用 supervisor 的注册表，避免两处名单） */
+// ── 基础工具 ────────────────────────────────────────────────────────
+
 function registry() {
   const file = path.join(ROOT, 'supervisor', 'workers.mjs');
   const text = fs.readFileSync(file, 'utf8');
@@ -91,13 +92,8 @@ function registry() {
   return out;
 }
 
-/** 锁文件多久没刷新（秒）——worker 每 20 秒摸一次自己的锁 */
 function lockAge(name) {
-  try {
-    return Math.round((Date.now() - fs.statSync(path.join(STATE, `${name}.lock`)).mtimeMs) / 1000);
-  } catch {
-    return -1;
-  }
+  try { return Math.round((Date.now() - fs.statSync(path.join(STATE, `${name}.lock`)).mtimeMs) / 1000); } catch { return -1; }
 }
 
 function pidAlive(pid) {
@@ -105,7 +101,6 @@ function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-/** 这个 pid 真的是 node 进程吗（防 Windows pid 复用杀错人） */
 function isNodePid(pid) {
   try {
     const out = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
@@ -115,8 +110,11 @@ function isNodePid(pid) {
   } catch { return false; }
 }
 
-function killTree(pid) {
-  try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 10000 }); return true; } catch { return false; }
+function killTree(pid, image = 'node.exe') {
+  try {
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 10000 });
+    return true;
+  } catch { return false; }
 }
 
 function readPidFile(f) {
@@ -124,10 +122,21 @@ function readPidFile(f) {
 }
 
 function tail(file, lines = 40) {
-  try {
-    const buf = fs.readFileSync(file, 'utf8');
-    return buf.split('\n').slice(-lines).join('\n');
-  } catch { return ''; }
+  try { return fs.readFileSync(file, 'utf8').split('\n').slice(-lines).join('\n'); } catch { return ''; }
+}
+
+function snapshotWorkers(now) {
+  return workers.map((w) => ({
+    name: w.name,
+    alive: !!(w.child && w.child.exitCode === null),
+    pid: w.child && w.child.pid ? w.child.pid : 0,
+    restarts: w.restarts,
+    lastStart: w.lastStart,
+    lockAgeSec: lockAge(w.name),
+    quarantineUntil: w.quarantineUntil || 0,
+    brokenUntil: w.brokenUntil || 0,
+    restartTimer: !!w.restartTimer,
+  }));
 }
 
 // ── 状态 ────────────────────────────────────────────────────────────
@@ -151,6 +160,22 @@ function writeStatus(extra = {}) {
     missing: WORKER_NAMES.filter((n) => !rows.some((r) => r.name === n)),
     bridge: !!(extra.bridge !== undefined ? extra.bridge : lastStack.bridge),
     napcat: !!(extra.napcat !== undefined ? extra.napcat : lastStack.napcat),
+    hemis: {
+      left: { status: hemis.left.status, notes: hemis.left.notes, metrics: hemis.left.metrics, errors: hemis.left.errors },
+      right: {
+        status: hemis.right.status,
+        violations: hemis.right.violations.length,
+        offlineSec: hemis.right.offlineUntil > now ? Math.round((hemis.right.offlineUntil - now) / 1000) : 0,
+      },
+      cerebellum: {
+        status: hemis.cerebellum.status,
+        violations: hemis.cerebellum.violations.length,
+        offlineSec: hemis.cerebellum.offlineUntil > now ? Math.round((hemis.cerebellum.offlineUntil - now) / 1000) : 0,
+        notes: hemis.cerebellum.notes,
+        metrics: hemis.cerebellum.metrics,
+      },
+      conflicts: conflicts.slice(-5),
+    },
     recentDecisions: decisions.slice(-5),
     ...extra,
   };
@@ -158,11 +183,19 @@ function writeStatus(extra = {}) {
   return data;
 }
 
+function loadBrainJson() {
+  try { return JSON.parse(fs.readFileSync(BRAIN_STATE, 'utf8')); } catch { return null; }
+}
+
 function printStatus() {
-  const d = (() => { try { return JSON.parse(fs.readFileSync(BRAIN_STATE, 'utf8')); } catch { return null; } })();
+  const d = loadBrainJson();
   if (!d) { console.log('还没有 brain.json（主脑还没跑过）'); return; }
   console.log(`主脑 pid=${d.pid}  更新于 ${new Date(d.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
   console.log(`  NapCat:${d.napcat ? '通' : '断'}  桥接:${d.bridge ? '通' : '断'}`);
+  const h = d.hemis || {};
+  if (h.left) console.log(`  左脑(安全):${h.left.status}${h.left.notes && h.left.notes.length ? '  ' + h.left.notes.join(' / ') : ''}`);
+  if (h.cerebellum) console.log(`  小脑(记忆/余额):${h.cerebellum.status}${h.cerebellum.offlineSec ? `  （自己下线 ${Math.ceil(h.cerebellum.offlineSec / 60)} 分钟）` : ''}${h.cerebellum.metrics && h.cerebellum.metrics.balance ? `  余额 ${h.cerebellum.metrics.balance}` : ''}`);
+  if (h.right) console.log(`  右脑(运行):${h.right.status}${h.right.offlineSec ? `  （自己下线 ${Math.ceil(h.right.offlineSec / 60)} 分钟）` : ''}${h.right.violations ? `  被否 ${h.right.violations} 次` : ''}`);
   console.log('  名字        状态    pid      重启  锁心跳  备注');
   for (const r of d.workers) {
     const beat = r.lockAgeSec < 0 ? '无锁' : `${r.lockAgeSec}s`;
@@ -180,6 +213,36 @@ function printStatus() {
   }
 }
 
+function printHemis() {
+  const d = loadBrainJson();
+  if (!d || !d.hemis) { console.log('还没有左右脑状态（主脑没跑过）'); return; }
+  const h = d.hemis;
+  console.log('左脑（安全/封号）');
+  console.log(`  状态：${h.left.status}${h.left.errors ? `（连续出错 ${h.left.errors} 次）` : ''}`);
+  const m = h.left.metrics || {};
+  console.log(`  现在看到：QQ 实例 ${m.qqCount ?? '?'} 个，今天登录 ${m.loginToday ?? '?'} 次，今天说了 ${m.spokenToday ?? '?'} 句，空间 ${m.qzoneToday ?? '?'} 条${m.night ? '，夜里' : ''}`);
+  if (h.left.notes && h.left.notes.length) console.log('  备注：' + h.left.notes.join(' / '));
+  console.log('右脑（运行逻辑）');
+  console.log(`  状态：${h.right.status}${h.right.offlineSec ? `（冲突后自己下线，还剩 ${Math.ceil(h.right.offlineSec / 60)} 分钟）` : ''}`);
+  console.log(`  10 分钟内被左脑否了 ${h.right.violations || 0} 次（${VIOLATION_LIMIT} 次就自己下线 ${RIGHT_OFFLINE_MS / 60000} 分钟）`);
+  if (h.cerebellum) {
+    const cm = h.cerebellum.metrics || {};
+    console.log('小脑（记忆/输入输出/余额）');
+    console.log(`  状态：${h.cerebellum.status}${h.cerebellum.offlineSec ? `（冲突后自己下线，还剩 ${Math.ceil(h.cerebellum.offlineSec / 60)} 分钟）` : ''}`);
+    console.log(`  现在看到：余额 ${cm.balance ?? '?'} 元${cm.saveMode ? '（省着聊）' : ''}，记忆 ${cm.memChars ?? '?'} 字，脏数据 ${cm.memJunk ?? '?'} 处，今天 ${cm.spoken ?? '?'} 句 / 平均 ${cm.avgLen ?? '?'} 字，今天的摘要${cm.hasSummaryToday ? '有' : '还没有'}`);
+    if (h.cerebellum.notes && h.cerebellum.notes.length) console.log('  备注：' + h.cerebellum.notes.join(' / '));
+    console.log(`  10 分钟内被左脑否了 ${h.cerebellum.violations || 0} 次`);
+  }
+  if (h.conflicts && h.conflicts.length) {
+    console.log('  最近冲突：');
+    for (const c of h.conflicts) {
+      console.log(`    ${new Date(c.at).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai' })} ${c.side || ''} ${c.kind}：${c.why}`);
+    }
+  } else {
+    console.log('  最近没有冲突');
+  }
+}
+
 function printDecisions() {
   let lines = [];
   try { lines = fs.readFileSync(DEC_LOG, 'utf8').trim().split('\n').slice(-20); } catch {}
@@ -192,24 +255,20 @@ function printDecisions() {
   }
 }
 
-// ── 拉起 / 收掉 ─────────────────────────────────────────────────────
+// ── worker 生命周期（右脑提案、主脑执行） ──────────────────────────
 
 function clearRestartTimer(w) {
   if (w.restartTimer) { clearTimeout(w.restartTimer); w.restartTimer = null; }
 }
 
 function start(w) {
-  if (stopping) return;
+  if (stopping) return false;
   if (!fs.existsSync(w.file)) {
-    if (!w.reportedMissing) {
-      decide('worker-缺文件', '跳过 ' + w.name, w.file);
-      w.reportedMissing = true;
-    }
-    return;
+    if (!w.reportedMissing) { decide('worker-缺文件', '跳过 ' + w.name, w.file); w.reportedMissing = true; }
+    return false;
   }
   const now = Date.now();
-  if (w.brokenUntil > now) return;      // 坏依赖，等人工
-  if (w.quarantineUntil > now) return;  // 反复崩，先冷一会儿
+  if (w.brokenUntil > now || w.quarantineUntil > now) return false;
 
   const outPath = path.join(STATE, `worker-${w.name}.log`);
   let out = null;
@@ -233,25 +292,23 @@ function start(w) {
     if (stopping) return;
     w.restarts += 1;
 
-    // 决策 4：依赖缺了，重启一百次也没用 —— 隔离，写告警，别刷日志
     const t = tail(path.join(STATE, `worker-${w.name}.log`), 60);
     const miss = t.match(/Cannot find module '([^']+)'/);
     if (miss) {
       w.brokenUntil = Date.now() + BROKEN_MS;
       w.brokenWhy = '缺模块 ' + miss[1];
       decide('worker-坏依赖', '隔离 ' + w.name + ' 30 分钟', miss[1]);
-      try { fs.writeFileSync(path.join(STATE, `ALERT-worker-${w.name}.txt`), `[${stamp()}] ${w.name} 缺模块 ${miss[1]}\n装好再等主脑自动重试，或手动改掉这个 worker。\n`); } catch {}
+      try { fs.writeFileSync(path.join(STATE, `ALERT-worker-${w.name}.txt`), `[${stamp()}] ${w.name} 缺模块 ${miss[1]}\n装好再等主脑自动重试。\n`); } catch {}
       return;
     }
 
-    if (code === 3) { // 锁冲突：多半是别的实例还活着，等它自己过期
+    if (code === 3) {
       log(`${w.name} 因锁冲突退出（另一个实例在跑），30 秒后复查`);
     } else {
       log(`${w.name} 退出 code=${code} sig=${signal || ''}，5 秒后重启`);
       decide('worker-崩了', '重启 ' + w.name, `code=${code}${signal ? ' sig=' + signal : ''}，第 ${w.recentExits.length} 次`);
     }
 
-    // 决策 2：反复崩 → 隔离，避免「重启风暴」把日志和 CPU 吃光（也避免被当成异常行为）
     if (w.recentExits.length >= CRASH_LIMIT) {
       w.quarantineUntil = Date.now() + QUARANTINE_MS;
       decide('worker-反复崩', `隔离 ${w.name} 10 分钟`, `${w.recentExits.length} 次/${CRASH_WINDOW_MS / 60000} 分钟，退出码 ${code}`);
@@ -263,6 +320,7 @@ function start(w) {
     clearRestartTimer(w);
     w.restartTimer = setTimeout(() => { w.restartTimer = null; start(w); }, delay);
   });
+  return true;
 }
 
 function stopAll() {
@@ -275,10 +333,6 @@ function stopAll() {
 
 // ── 接管 / 抢锁 ─────────────────────────────────────────────────────
 
-/**
- * 接管旧 supervisor（老角色，已经被主脑取代）。
- * 它也拉一整套 worker，两边抢单实例锁的典型症状是「状态表全停了、机器上却有 worker 在跑」。
- */
 function takeOverSupervisor() {
   const pid = readPidFile(SUP_LOCK);
   if (!pid || pid === process.pid) return;
@@ -287,7 +341,6 @@ function takeOverSupervisor() {
   else decide('接管旧 supervisor', '收掉失败 pid ' + pid, '它可能还在抢 worker');
 }
 
-/** 占住 supervisor 的角色锁：只要主脑活着，旧 supervisor 起来就自己退出（码 3） */
 function claimSupervisorRole() {
   const beat = () => { try { fs.mkdirSync(STATE, { recursive: true }); fs.writeFileSync(SUP_LOCK, String(process.pid)); } catch {} };
   beat();
@@ -297,7 +350,6 @@ function claimSupervisorRole() {
   });
 }
 
-/** 锁被人占着、但那不是我的子进程 → 孤儿回收（只认 node 进程，别杀错） */
 function killOrphan(name) {
   const f = path.join(STATE, `${name}.lock`);
   const pid = readPidFile(f);
@@ -309,96 +361,59 @@ function killOrphan(name) {
   try { fs.unlinkSync(f); } catch {}
 }
 
-// ── 决策规则：worker 层 ─────────────────────────────────────────────
+// ── 执行器（所有副作用都在主脑这一层） ─────────────────────────────
 
-function reviewWorkers() {
-  const now = Date.now();
-  for (const w of workers) {
-    const alive = w.child && w.child.exitCode === null;
-
-    // 决策 3：活着但锁不跳 = 卡死（同步调用/死循环），杀掉重来
-    if (alive && w.lastStart && now - w.lastStart > 240000) {
-      const age = lockAge(w.name);
-      if (age > HUNG_LOCK_SEC) {
-        decide('worker-卡死', '重启 ' + w.name, `锁 ${age}s 没心跳`);
-        try { w.child.kill(); } catch {}
-        continue;
-      }
-    }
-
-    if (alive) continue;
-    if (w.quarantineUntil > now || w.brokenUntil > now) continue;
-
-    // 没在跑，也没有待触发的重启定时器（定时器路径由 exit 事件负责）
-    if (w.restartTimer) continue;
-
-    killOrphan(w.name);
-    const age = lockAge(w.name);
-    if (age >= 0 && age < 120) continue; // 别人的实例还活着，别抢
-    decide('worker-补拉', '拉起 ' + w.name, age < 0 ? '没有锁' : `锁 ${age}s 没心跳`);
-    start(w);
-  }
-}
-
-// ── 决策规则：桥接 / 巡检 / 磁盘 ────────────────────────────────────
-
-let bridgeStarted = [];    // 拉起桥接的时间戳，用来退避
-let bridgeBackoffUntil = 0;
-let napcatDownStreak = 0;
-let lastDoctorRun = 0;
-
-function startBridge() {
-  const now = Date.now();
-  bridgeStarted = bridgeStarted.filter((t) => now - t < 15 * 60 * 1000);
-  if (now < bridgeBackoffUntil) return false;
-  if (bridgeStarted.length >= 3) {
-    bridgeBackoffUntil = now + 10 * 60 * 1000;
-    decide('桥接-多次拉不起来', '退避 10 分钟', `15 分钟内试了 ${bridgeStarted.length} 次`);
-    try { fs.writeFileSync(path.join(STATE, 'ALERT-bridge.txt'), `[${stamp()}] 桥接 15 分钟内拉了 ${bridgeStarted.length} 次还是没起来，先歇 10 分钟再看。\n`); } catch {}
-    return;
-  }
-  bridgeStarted.push(now);
+function spawnBridge() {
   try {
     const out = fs.openSync(path.join(STATE, 'bridge-run.log'), 'a');
     const child = spawn(process.execPath, [path.join(BRIDGE, 'src', 'bridge.js')], {
       cwd: BRIDGE, stdio: ['ignore', out, out], windowsHide: true, detached: true,
     });
     child.unref();
-    decide('桥接-断了', '拉起桥接 pid ' + child.pid, 'NapCat 通、:3100 断');
     try { fs.closeSync(out); } catch {}
-    return true;
-  } catch (e) {
-    decide('桥接-拉起失败', '记一笔', e.message);
-    return false;
-  }
+    return { ok: true, pid: child.pid };
+  } catch (e) { return { ok: false, err: e.message }; }
 }
 
-/** 巡检是登录/掉线那套规矩的负责人（次数预算、夜间静默、邮件链接都在它那儿），
- *  主脑不越权碰 QQ 登录，只负责「确认它还在跑」。 */
-function ensureDoctor() {
-  const now = Date.now();
-  if (now - lastDoctorRun < 5 * 60 * 1000) return;
-  let last = 0;
+function spawnNapcat() {
   try {
-    const out = execFileSync('powershell', ['-NoProfile', '-Command',
-      "(Get-ScheduledTaskInfo -TaskName 'QQStackDoctor').LastRunTime.ToUniversalTime().ToString('o')"],
-      { encoding: 'utf8', windowsHide: true, timeout: 15000 });
-    last = Date.parse(out.trim()) || 0;
+    const child = spawn(process.execPath, [path.join(ROOT, 'tools', 'napcat-start.mjs'), '--as-user'], {
+      cwd: ROOT, stdio: 'ignore', windowsHide: true, detached: true,
+    });
+    child.unref();
+    return { ok: true, pid: child.pid };
+  } catch (e) { return { ok: false, err: e.message }; }
+}
+
+function runDoctor() {
+  try { execFileSync('schtasks', ['/run', '/tn', 'QQStackDoctor'], { stdio: 'ignore', windowsHide: true, timeout: 15000 }); return { ok: true }; } catch (e) { return { ok: false, err: e.message }; }
+}
+
+/** 只留一个 QQ：保住 :3000 的那个进程，其余按进程树杀 */
+function killExtraQQ() {
+  let keep = 0;
+  try {
+    const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    for (const line of out.split('\n')) {
+      if (!/:3000\b/.test(line) || !/LISTEN/i.test(line)) continue;
+      const cols = line.trim().split(/\s+/);
+      keep = Number(cols[cols.length - 1]) || keep;
+    }
   } catch {}
-  if (last && now - last < 10 * 60 * 1000) return; // 10 分钟内跑过，正常
-  lastDoctorRun = now;
+  let pids = [];
   try {
-    execFileSync('schtasks', ['/run', '/tn', 'QQStackDoctor'], { stdio: 'ignore', windowsHide: true, timeout: 15000 });
-    decide('巡检-没在跑', '手动触发 QQStackDoctor', last ? `上次 ${Math.round((now - last) / 60000)} 分钟前` : '查不到上次时间');
-  } catch (e) {
-    decide('巡检-触发失败', '记一笔', e.message);
-  }
+    const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    pids = [...out.matchAll(/"QQ\.exe","(\d+)"/gi)].map((m) => Number(m[1]));
+  } catch {}
+  const extras = pids.filter((p) => p !== keep);
+  let killed = 0;
+  for (const p of extras) { if (killTree(p)) killed += 1; }
+  return { ok: killed > 0, keep, killed, extras };
 }
 
 function trimLogs() {
-  let dirs = [];
-  try { dirs = [STATE, path.join(ROOT, 'stack-guard'), path.join(ROOT, 'stack-doctor')]; } catch {}
-  for (const dir of dirs) {
+  let trimmed = 0;
+  for (const dir of [STATE, path.join(ROOT, 'stack-guard'), path.join(ROOT, 'stack-doctor')]) {
     let files = [];
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.log')); } catch { continue; }
     for (const f of files) {
@@ -406,44 +421,264 @@ function trimLogs() {
       try {
         const st = fs.statSync(p);
         if (st.size < LOG_MAX_BYTES) continue;
-        const keep = fs.readFileSync(p, 'utf8').split('\n').slice(-1500).join('\n');
-        fs.writeFileSync(p, keep);
+        fs.writeFileSync(p, fs.readFileSync(p, 'utf8').split('\n').slice(-1500).join('\n'));
+        trimmed += 1;
         decide('日志-太大', '裁剪 ' + f, `${Math.round(st.size / 1048576)}MB → 1500 行`);
       } catch {}
     }
   }
+  return { ok: true, trimmed };
 }
 
-async function reviewStack() {
-  let napcat = false;
-  let bridge = false;
-  try { napcat = await portOpen(PORTS.napcat); } catch {}
-  try { bridge = await portOpen(PORTS.bridge); } catch {}
-
-  if (!napcat) napcatDownStreak += 1; else napcatDownStreak = 0;
-
-  if (napcat && !bridge) bridge = startBridge(); // 拉起来了就先按通了算，下一个 60 秒会纠正
-  if (bridge) { bridgeBackoffUntil = 0; try { fs.unlinkSync(path.join(STATE, 'ALERT-bridge.txt')); } catch {} }
-
-  // NapCat 断了不自己乱拉（要一次 UAC，且登录有预算）—— 交给巡检，但确认巡检真的在跑
-  if (!napcat && napcatDownStreak >= 3) {
-    decide('NapCat-断', '交给巡检处理', `${napcatDownStreak * 20}s 没起来`);
-    ensureDoctor();
+async function execute(p) {
+  switch (p.kind) {
+    case 'start-worker': {
+      const w = workers.find((x) => x.name === p.name);
+      if (!w) return { ok: false, err: '没有这个 worker' };
+      killOrphan(p.name);
+      const ok = start(w);
+      if (ok) decide('worker-补拉', '拉起 ' + p.name, p.why);
+      return { ok };
+    }
+    case 'restart-hung': {
+      const w = workers.find((x) => x.name === p.name);
+      if (!w || !w.child) return { ok: false };
+      decide('worker-卡死', '重启 ' + p.name, p.why);
+      try { w.child.kill(); } catch {}
+      return { ok: true };
+    }
+    case 'start-bridge': {
+      const r = spawnBridge();
+      if (r.ok) decide('桥接-断了', '拉起桥接 pid ' + r.pid, p.why);
+      else decide('桥接-拉起失败', '记一笔', r.err);
+      return r;
+    }
+    case 'start-napcat': {
+      const r = spawnNapcat();
+      if (r.ok) decide('NapCat-断', '拉起 NapCat pid ' + r.pid, p.why);
+      else decide('NapCat-拉起失败', '记一笔', r.err);
+      return r;
+    }
+    case 'run-doctor': {
+      const r = runDoctor();
+      if (r.ok) decide('巡检-催一下', '手动触发 QQStackDoctor', p.why);
+      return r;
+    }
+    case 'trim-logs':
+      return trimLogs();
+    case 'run-memory-tidy': {
+      const r = runScript('memory-tidy/memory-tidy.mjs');
+      if (r.ok) decide('小脑-整理记忆', '跑 memory-tidy pid ' + r.pid, p.why);
+      else decide('小脑-整理记忆失败', '记一笔', r.err);
+      return r;
+    }
+    case 'run-memory-summary': {
+      const r = runScript('memory-summary/memory-summary.mjs', p.day ? [p.day] : []);
+      if (r.ok) decide('小脑-做今天摘要', '跑 memory-summary pid ' + r.pid, p.why);
+      else decide('小脑-摘要失败', '记一笔', r.err);
+      return r;
+    }
+    case 'send-mail': {
+      const subject = '哥哥，我快没钱说话了';
+      const body = `这边余额只剩 ${p.balance} 元了，主动找你说话我先停了（省着用）。\n充一点我就能正常唠：https://platform.deepseek.com/top_up\n（这条是主脑的小脑发的，一天最多一封）`;
+      const r = sendMail(subject, body);
+      if (r.ok) decide('小脑-提醒充值', '发邮件', p.why);
+      else decide('小脑-提醒充值失败', '记一笔', r.err);
+      return r;
+    }
+    case 'save-mode': {
+      const r = writeSaveMode(true, p.why || '');
+      if (r.ok) decide('小脑-省着聊', '主动发言关掉', p.why);
+      return r;
+    }
+    default:
+      return { ok: false, err: '不认识的提案 ' + p.kind };
   }
-  if (napcat && bridge) lastDoctorRun = 0;
+}
 
-  lastStack = { napcat, bridge };
-  return { napcat, bridge };
+// ── 仲裁：右脑提，左脑否，主脑定 ───────────────────────────────────
+
+function noteConflict(side, kind, why) {
+  const c = { at: new Date().toISOString(), side, kind, why };
+  conflicts.push(c);
+  if (conflicts.length > CONFLICT_KEEP) conflicts.shift();
+  const now = Date.now();
+  const h = hemis[side];
+  h.violations = h.violations.filter((t) => now - t < VIOLATION_WINDOW_MS);
+  h.violations.push(now);
+  decide(`冲突-${side === 'right' ? '右脑' : '小脑'}动作下线`, kind, why);
+  if (h.violations.length >= VIOLATION_LIMIT && h.offlineUntil < now) {
+    h.offlineUntil = now + RIGHT_OFFLINE_MS;
+    h.status = 'offline';
+    decide(`${side === 'right' ? '右脑' : '小脑'}-自己下线`, `${RIGHT_OFFLINE_MS / 60000} 分钟内不再提这类东西`, `${VIOLATION_LIMIT} 次冲突：${kind}`);
+  }
+}
+
+function evaluateLeft(now, ports) {
+  try {
+    const lv = left.evaluate({ now, root: ROOT, bridgeDir: BRIDGE, ports });
+    hemis.left = { status: 'online', errors: 0, notes: lv.notes || [], metrics: lv.metrics || {}, at: now };
+    return lv;
+  } catch (e) {
+    hemis.left.errors += 1;
+    if (hemis.left.status !== 'offline') decide('左脑-下线', '切到最严静态策略', e.message);
+    hemis.left.status = 'offline';
+    hemis.left.notes = ['它自己坏了：' + e.message];
+    return left.SAFE_DEFAULT;
+  }
+}
+
+function gate(p, lv) {
+  // 保命动作不碰 QQ 账号，不走封号闸门：卡着只会让服务死透
+  if (p.essential) return { allow: true };
+  const v = lv.verdicts && lv.verdicts[p.kind];
+  if (!v) return { allow: true };
+  return v;
+}
+
+/** 跑一个后台脚本（memory-tidy / memory-summary 这类一次性任务） */
+function runScript(rel, args = []) {
+  try {
+    const file = path.join(ROOT, rel);
+    const child = spawn(process.execPath, [file, ...args], {
+      cwd: path.dirname(file), stdio: 'ignore', windowsHide: true, detached: true,
+    });
+    child.unref();
+    return { ok: true, pid: child.pid };
+  } catch (e) { return { ok: false, err: e.message }; }
+}
+
+/** 余额提醒邮件：走掉线通知同一个通道（smtp 认证码是 DPAPI 加密的，不用重复配） */
+function sendMail(subject, body) {
+  try {
+    const file = path.join(ROOT, 'tools', 'notify-offline.mjs');
+    if (!fs.existsSync(file)) return { ok: false, err: '没有 notify-offline.mjs' };
+    const child = spawn(process.execPath, [file, `--subject=${subject}`, `--body=${body}`], {
+      cwd: ROOT, stdio: 'ignore', windowsHide: true, detached: true,
+    });
+    child.unref();
+    return { ok: true, pid: child.pid };
+  } catch (e) { return { ok: false, err: e.message }; }
+}
+
+/** 小脑说的「省着聊」：落成一份策略文件，balance-watch 会读它压掉主动发言 */
+function writeSaveMode(on, why = '') {
+  try {
+    const p = path.join(ROOT, 'state', 'cerebellum-policy.json');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({ proactive: on ? 'off' : 'normal', why, at: new Date().toISOString() }, null, 2));
+    return { ok: true };
+  } catch (e) { return { ok: false, err: e.message }; }
+}
+
+async function reviewCycle() {
+  const now = Date.now();
+  let ports = { napcat: false, bridge: false };
+  try { ports.napcat = await portOpen(3000); } catch {}
+  try { ports.bridge = await portOpen(3100); } catch {}
+
+  const lv = evaluateLeft(now, ports);
+
+  // 左脑自己的安全动作（清多余 QQ 实例等）—— 安全优先，直接执行
+  for (const p of lv.proposals || []) {
+    if (p.kind === 'kill-qq-extra') {
+      const r = killExtraQQ();
+      if (r.killed) decide('左脑-清多余实例', `杀 ${r.killed} 个，留 pid ${r.keep}`, p.why);
+    }
+  }
+
+  // 右脑上线判断：它自己下线期间，只做保命动作
+  if (hemis.right.offlineUntil && now >= hemis.right.offlineUntil) {
+    hemis.right.status = 'online';
+    hemis.right.violations = [];
+    decide('右脑-恢复', '重新开始提提案', '下线时间到');
+  }
+
+  let rp = { proposals: [] };
+  try {
+    rp = right.plan({ now, workers: snapshotWorkers(now), ports });
+    if (hemis.right.status !== 'offline') hemis.right.status = 'online';
+  } catch (e) {
+    hemis.right.status = 'offline';
+    hemis.right.offlineUntil = now + RIGHT_OFFLINE_MS;
+    decide('右脑-自己下线', '它抛异常了，主脑只保命', e.message);
+    // 兜底：只补拉挂掉的 worker
+    rp = {
+      proposals: snapshotWorkers(now)
+        .filter((w) => !w.alive && !w.quarantineUntil && !w.brokenUntil && !w.restartTimer)
+        .map((w) => ({ kind: 'start-worker', name: w.name, essential: true, why: '右脑不在，主脑兜底' })),
+    };
+  }
+
+  for (const p of rp.proposals) {
+    if (hemis.right.status === 'offline' && !p.essential) continue;
+    const verdict = gate(p, lv);
+    if (!verdict.allow) { noteConflict('right', p.kind, verdict.why || '左脑否决'); continue; }
+    const r = await execute(p);
+    if (!r.ok && p.essential) log(`执行 ${p.kind} 没成功：${r.err || ''}`);
+    try {
+      right.feedback(p.kind, r.ok !== false);
+      fs.writeFileSync(RIGHT_STATE, JSON.stringify(right.snapshot()));
+    } catch {}
+  }
+
+  // ── 小脑：记忆 / 输入输出 / 余额 ──────────────────────────────
+  if (hemis.cerebellum.offlineUntil && now >= hemis.cerebellum.offlineUntil) {
+    hemis.cerebellum.status = 'online';
+    hemis.cerebellum.violations = [];
+    decide('小脑-恢复', '重新开始提提案', '下线时间到');
+  }
+  let cp = { proposals: [] };
+  try {
+    cp = cerebellum.plan({ now, root: ROOT, bridgeState: STATE });
+    hemis.cerebellum.notes = cp.notes || [];
+    hemis.cerebellum.metrics = cp.metrics || {};
+    hemis.cerebellum.at = now;
+    if (hemis.cerebellum.status !== 'offline') hemis.cerebellum.status = 'online';
+  } catch (e) {
+    hemis.cerebellum.status = 'offline';
+    hemis.cerebellum.offlineUntil = now + RIGHT_OFFLINE_MS;
+    hemis.cerebellum.notes = ['它自己坏了：' + e.message];
+    decide('小脑-自己下线', '它抛异常了，主脑不管记忆和余额', e.message);
+  }
+  for (const p of cp.proposals || []) {
+    if (hemis.cerebellum.status === 'offline') break;
+    const verdict = gate(p, lv);
+    if (!verdict.allow) { noteConflict('cerebellum', p.kind, verdict.why || '左脑否决'); continue; }
+    const r = await execute(p);
+    try { cerebellum.feedback(ROOT, p.kind, r.ok !== false); } catch {}
+  }
+
+  lastStack = { napcat: ports.napcat, bridge: ports.bridge };
+  await maybeAlertHemis(now);
+  writeStatus(ports);
+}
+
+/** 两个脑都下线 = 只剩保命：写告警，但不发邮件（邮件是掉线专用通道，别滥用） */
+let alertedHemis = 0;
+async function maybeAlertHemis(now) {
+  const both = hemis.left.status === 'offline' && hemis.right.status === 'offline';
+  if (!both) { alertedHemis = 0; try { fs.unlinkSync(path.join(STATE, 'ALERT-hemis.txt')); } catch {} return; }
+  if (now - alertedHemis < 10 * 60 * 1000) return;
+  alertedHemis = now;
+  try {
+    fs.writeFileSync(path.join(STATE, 'ALERT-hemis.txt'),
+      `[${stamp()}] 左右脑都不在线：左脑 ${hemis.left.errors} 次异常，右脑下线中。\n` +
+      `现在只执行保命动作（补拉 worker），账号动作全禁。\n` +
+      `看 node brain.mjs --hemis\n`);
+  } catch {}
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────
 
 async function main() {
   if (STATUS_ONLY) { printStatus(); return; }
+  if (HEMIS_ONLY) { printHemis(); return; }
   if (DECISIONS_ONLY) { printDecisions(); return; }
 
   singleInstance('brain');
-  log('主脑启动');
+  try { right.hydrate(JSON.parse(fs.readFileSync(RIGHT_STATE, 'utf8'))); } catch {}
+  log('主脑启动（左脑=安全 / 右脑=运行 / 小脑=记忆余额，主脑仲裁）');
   takeOverSupervisor();
   claimSupervisorRole();
 
@@ -456,41 +691,26 @@ async function main() {
   if (!workers.length) { log('注册表读不出任何 worker，退出'); process.exitCode = 1; return; }
 
   for (const w of workers) { killOrphan(w.name); start(w); }
-  // 先探一次端口再落盘：否则头 60 秒的状态页会把「通」写成「断」
-  const s0 = await reviewStack().catch(() => ({}));
-  writeStatus(s0);
+  await reviewCycle().catch((e) => log('首轮仲裁出错：' + e.message));
 
   const writeTimer = setInterval(() => { if (!stopping) writeStatus(); }, 20000);
 
-  // 每 20 秒：worker 层（便宜）
-  const workerTimer = setInterval(() => {
+  // 20 秒一轮：左右脑各说一句，主脑仲裁执行
+  const cycleTimer = setInterval(() => {
     if (stopping) return;
-    try { reviewWorkers(); } catch (e) { log('reviewWorkers 出错：' + e.message); }
+    reviewCycle().catch((e) => log('仲裁轮出错：' + e.message));
   }, 20000);
-
-  // 每 60 秒：整条链（端口探测有开销）+ 磁盘
-  const stackTimer = setInterval(() => {
-    if (stopping) return;
-    reviewStack()
-      .then((s) => writeStatus(s))
-      .catch((e) => log('reviewStack 出错：' + e.message));
-    try { trimLogs(); } catch (e) { log('trimLogs 出错：' + e.message); }
-  }, 60000);
 
   if (ONCE) {
     setTimeout(async () => {
-      const s = await reviewStack().catch(() => ({}));
-      writeStatus(s);
       stopAll();
       clearInterval(writeTimer);
-      clearInterval(workerTimer);
-      clearInterval(stackTimer);
+      clearInterval(cycleTimer);
       process.exitCode = 0;
     }, 3000);
     return;
   }
 
-  // 优雅退出：把子进程一起收掉，别留孤儿
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.on(sig, () => {
       log(`收到 ${sig}，收掉所有 worker`);

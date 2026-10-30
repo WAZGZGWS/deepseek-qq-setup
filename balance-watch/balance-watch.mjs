@@ -221,7 +221,16 @@ const MODES = [
 
 function pickMode(total) {
   // 升序，第一个命中就是最紧的一档
-  return MODES.find((m) => total < m.below) || MODES[MODES.length - 1];
+  const mode = MODES.find((m) => total < m.below) || MODES[MODES.length - 1];
+  // 小脑说「省着聊」时（state/cerebellum-policy.json proactive=off），
+  // 不主动开口 —— 这是小脑管余额的手，别在这里再写一套阈值。
+  try {
+    const policy = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'state', 'cerebellum-policy.json'), 'utf8'));
+    if (policy && policy.proactive === 'off') {
+      return { id: mode.id + '+小脑省聊', below: mode.below, patch: { ...mode.patch, proactive: { enabled: false } } };
+    }
+  } catch {}
+  return mode;
 }
 
 function consoleToken() {
