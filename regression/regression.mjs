@@ -299,6 +299,25 @@ check('滴眼药水做完就不再提', () => {
   if (!/if \(!process\.argv\.includes\('--selftest'\)\) singleInstance/.test(s)) bad.push('selftest 会被实例锁挡住，没法在线测');
   return bad.length === 0 || bad.join('；');
 });
+check('生日那天说说冷却会放宽', () => {
+  // 2026-10-30：她 10:46 先发了一条，10:50 的生日任务想再发被 4 小时冷却挡死。
+  const qz = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'src', 'mcp-qzone.mjs');
+  if (!fs.existsSync(qz)) return '找不到 mcp-qzone.mjs';
+  const s = fs.readFileSync(qz, 'utf8');
+  const bad = [];
+  if (!/specialDayToday/.test(s)) bad.push('没有特殊日子判断');
+  if (!/special-days\.json/.test(s)) bad.push('没读 special-days.json');
+  if (!/GAP = SPECIAL/.test(s)) bad.push('冷却没有按特殊日子放宽');
+  const sp = path.join(ROOT, 'state', 'special-days.json');
+  if (!fs.existsSync(sp)) bad.push('state/special-days.json 还没生成（跑一次 tools/self-birthday.mjs）');
+  return bad.length === 0 || bad.join('；');
+});
+check('过期的一次性任务会被清掉', () => {
+  // 滴眼药水每天两条，执行完变 disabled 留在列表里，两周就几十条。
+  const s = fs.readFileSync(path.join(ROOT, 'maintenance', 'maintenance.mjs'), 'utf8');
+  return /pruneFinishedTasks/.test(s) && /schedule\.type !== 'once'/.test(s) || 'maintenance 没有清理过期一次性任务';
+});
+check('有静态自查工具（找未定义调用）', () => fs.existsSync(path.join(ROOT, 'tools', 'static-audit.mjs')) || '缺 tools/static-audit.mjs');
 check('充上钱的道谢每次不一样', () => {
   // 2026-10-30：以前是一句写死的「哥你充上啦，我又能说话了」，充几次就听几次。
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');

@@ -63,7 +63,7 @@ function findOwner(raw) {
 const OWN_INSTRUCTION =
   '今天是你的生日（你自己定的那天）。' +
   '① 跟哥说一句：你怎么过、或者现在什么心情，随口说，别写成长篇；别向他要礼物，他主动提就接住。' +
-  '② 今天**允许你发一条说说**（qzone_publish）：**按你自己的想法写**，长度、语气、写什么都随你，不用套平时的规矩；发完不用解释。';
+  '② 今天**允许你发一条说说**（qzone_publish）：**按你自己的想法写**，长度、语气、写什么都随你，不用套平时的规矩；如果今天已经发过了就不用再发，发完也不用解释。';
 
 const OWNER_INSTRUCTION =
   '今天是哥的生日。' +
@@ -125,3 +125,18 @@ if (!owner) log('记忆里没有「哥生日X月X日」，跳过主人的生日'
 else await ensureYearly('他的生日', owner.mmdd, OWNER_INSTRUCTION);
 
 writeLenient([own && own.mmdd, owner && owner.mmdd]);
+
+// 再写一份「特殊日子」给别的组件用（比如 qzone 的冷却在那天放宽）：
+// 只存 MM-DD，不写是谁的生日，别的模块不需要知道这么多。
+try {
+  const dates = [...new Set([own && own.mmdd, owner && owner.mmdd].filter(Boolean))].sort();
+  const file = path.join(ROOT, 'state', 'special-days.json');
+  if (!DRY) {
+    const cur = (() => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; } })();
+    if (JSON.stringify(cur.dates || []) !== JSON.stringify(dates)) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({ dates, _说明: '特殊日子（生日）：这天放宽一些限制，由 tools/self-birthday.mjs 维护' }, null, 2) + '\n', 'utf8');
+      log(`特殊日子已更新：${dates.join(' / ') || '(空)'}`);
+    }
+  }
+} catch {}

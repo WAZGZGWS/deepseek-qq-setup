@@ -146,4 +146,40 @@ for (const name of ['bridge.log', 'janitor.log', 'watchdog.log', 'qq-activity.lo
 for (const name of ['token-usage.jsonl', 'tool-calls.jsonl']) {
   rotate(path.join(STATE, name), 20 * 1024 * 1024);
 }
+/**
+ * 清理「跑完就停用」的一次性任务（滴眼药水、生日补发这类）。
+ *
+ * 它们到点执行完会变成 disabled 留在 scheduler 里，一天两条地攒 ——
+ * 攒上两周，列表里几十条停用的，人和 AI 都看不清哪些还在生效。
+ * 只删「once 类型 + 已停用 + 日期早于昨天」的，绝不碰 yearly/daily 和还没到点的。
+ */
+async function pruneFinishedTasks() {
+  const base = 'http://127.0.0.1:3100';
+  let token = '';
+  try { token = fs.readFileSync(path.join(BRIDGE, 'state', 'console-token'), 'utf8').trim(); } catch {}
+  if (!token) return 0;
+  const call = async (p, opt = {}) => {
+    const r = await fetch(base + p, { ...opt, headers: { 'content-type': 'application/json', 'x-console-token': token }, signal: AbortSignal.timeout(15000) });
+    return r.json().catch(() => ({}));
+  };
+  let snap;
+  try { snap = await call('/api/scheduler'); } catch { return 0; }
+  const tasks = Array.isArray(snap?.tasks) ? snap.tasks : [];
+  const yesterday = new Date(Date.now() - 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+  let removed = 0;
+  for (const t of tasks) {
+    if (!t || t.enabled !== false) continue;
+    if (!t.schedule || t.schedule.type !== 'once') continue;
+    const date = String(t.schedule.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= yesterday) continue;
+    try {
+      const r = await call(`/api/scheduler/tasks/${t.id}`, { method: 'DELETE' });
+      if (r?.ok) { removed += 1; log(`清掉过期的一次性任务 #${t.id} ${t.name}`); }
+    } catch {}
+  }
+  if (removed) log(`一次性任务清理：删了 ${removed} 条`);
+  return removed;
+}
+
 backup();
+await pruneFinishedTasks().catch((e) => log('清理一次性任务失败:', e.message));
