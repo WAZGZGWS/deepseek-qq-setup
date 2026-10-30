@@ -53,6 +53,45 @@ function speechStats(root, day) {
   } catch { return { count: 0, avg: 0, long: 0 }; }
 }
 
+/**
+ * 记忆体检（本地文件，不打扰桥接）：
+ * 数一数污染字符、重复条目、核心要点有多少条 —— 发现问题才提案，动手交给右手。
+ */
+function memoryAudit(ctx) {
+  const dir = ctx.bridgeDir || '';
+  const file = path.join(dir, 'state', 'social-v2.json');
+  const j = tryJson(file);
+  if (!j || !j.conversations) return null;
+  const keys = Object.keys(j.conversations);
+  const key = keys[0];
+  if (!key) return null;
+  const conv = j.conversations[key] || {};
+  const norm = (s) => String(s ?? '')
+    .replace(/[\u0000-\u001f\u007f\u200b-\u200f\ufeff]/g, '')
+    .replace(/[，。！？、；：""''（）()\[\]【】…—\-\s,.!?;:'"`~]/g, '')
+    .toLowerCase();
+  const bad = (s) => {
+    const x = String(s ?? '');
+    if (!x.trim()) return true;
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(x)) return true;
+    if (x.includes('\uFFFD')) return true;
+    return norm(x).length < 2;
+  };
+
+  let facts = 0; let polluted = 0; let dup = 0;
+  for (const field of ['facts', 'activeTopics', 'pendingThoughts']) {
+    const list = Array.isArray(conv[field]) ? conv[field] : [];
+    if (field === 'facts') facts = list.length;
+    const seen = new Set();
+    for (const e of list) {
+      const text = String(e && e.text !== undefined ? e.text : '');
+      if (bad(text)) { polluted += 1; continue; }
+      const n = norm(text);
+      if (seen.has(n)) dup += 1; else seen.add(n);
+    }
+  }
+  return { key, facts, topics: (conv.activeTopics || []).length, polluted, dup };
+}
 /** 记忆里有没有脏数据（[object Object] / undefined 被当成事实存进去过） */
 function memoryJunk(root) {
   const dir = path.join(root, 'chat-memory');
@@ -111,6 +150,17 @@ export function plan(ctx) {
     });
   }
 
+  // ── 记忆：污染字符 / 重复条目（动手的是右手，小脑只负责看出来） ──
+  const audit = memoryAudit(ctx);
+  if (audit && (audit.polluted > 0 || audit.dup > 0) && now - (st.lastCleanAt || 0) > 2 * 3600 * 1000) {
+    proposals.push({
+      kind: 'clean-memory',
+      why: `记忆里 ${audit.polluted} 条污染 / ${audit.dup} 条重复`,
+      counts: audit,
+    });
+  }
+  if (audit) notes.push(`记忆 ${audit.facts} 条事实 / ${audit.topics} 个话题`);
+
   // ── 输出方式：越来越长/越来越密就记一笔（不改她的话，只让主脑知道） ──
   if (sp.count >= 20 && sp.avg > 160) notes.push(`今天平均每条 ${sp.avg} 字（偏长）`);
   if (sp.long >= 5) notes.push(`今天有 ${sp.long} 条超过 400 字`);
@@ -119,8 +169,9 @@ export function plan(ctx) {
     online: true,
     notes,
     proposals,
-    metrics: { balance, saveMode, memChars: chars, memJunk: junk, spoken: sp.count, avgLen: sp.avg, hasSummaryToday },
+    metrics: { balance, saveMode, memChars: chars, memJunk: junk, spoken: sp.count, avgLen: sp.avg, hasSummaryToday, facts: audit ? audit.facts : 0, memPolluted: audit ? audit.polluted : 0, memDup: audit ? audit.dup : 0 },
     state: st,
+    key: audit ? audit.key : '',
   };
 }
 
@@ -132,6 +183,7 @@ export function feedback(root, kind, ok) {
   if (kind === 'run-memory-summary' && ok) st.lastSummaryAt = now;
   if (kind === 'send-mail' && ok) st.lastMailAt = now;
   if (kind === 'save-mode') st.saveMode = ok;
+  if (kind === 'clean-memory' && ok) st.lastCleanAt = now;
   st.at = new Date().toISOString();
   writeState(root, st);
 }

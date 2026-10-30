@@ -32,6 +32,8 @@ import { WORKER_NAMES } from './supervisor/workers.mjs';
 import * as left from './hemis/left.mjs';
 import * as right from './hemis/right.mjs';
 import * as cerebellum from './hemis/cerebellum.mjs';
+import * as leftHand from './hands/left-hand.mjs';
+import * as rightHand from './hands/right-hand.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BRAIN_STATE = path.join(STATE, 'brain.json');
@@ -64,6 +66,12 @@ const hemis = {
 };
 let lastStack = { napcat: false, bridge: false };
 let stopping = false;
+// 主脑的「维持」状态：NapCat 最近通的时间、这次断了多久、上次越权的时间
+let napcatUpAt = 0;
+let napcatDownSince = 0;
+let lastOverrideAt = 0;
+let lastMaintainAt = 0;
+let lastHandAt = 0;
 
 function log(msg) {
   const line = `[${stamp()}] ${msg}`;
@@ -491,6 +499,23 @@ async function execute(p) {
       if (r.ok) decide('小脑-省着聊', '主动发言关掉', p.why);
       return r;
     }
+    case 'trash-files': {
+      const r = leftHand.apply(ROOT, p.items || []);
+      if (r.ok && r.moved) decide('左手-清垃圾', `移走 ${r.moved} 个（${Math.round((r.freed || 0) / 1048576)}MB）`, p.why || '');
+      return r;
+    }
+    case 'clean-memory': {
+      const key = (p.counts && p.counts.key) || p.key || '';
+      if (!key) return { ok: false, err: '不知道删哪个会话的记忆' };
+      const got = await rightHand.collect({ root: ROOT, bridgeDir: BRIDGE, key });
+      // collect() 返回的是 { proposals: [{ items }] } —— 别直接读 got.items（这个字段不存在，
+      // 踩过一次：右手永远「删 0 条」，但小脑的冷却也被记上了，看起来像是在干活）
+      const list = (got && got.proposals && got.proposals[0] && got.proposals[0].items) || [];
+      if (!list.length) return { ok: true, removed: 0 };
+      const r = await rightHand.apply({ root: ROOT, bridgeDir: BRIDGE, key }, list);
+      if (r.ok) decide('右手-清记忆', `删 ${r.removed} 条重复/污染`, `${p.why || ''}${r.backup ? '，备份 ' + path.basename(r.backup) : ''}`);
+      return r;
+    }
     default:
       return { ok: false, err: '不认识的提案 ' + p.kind };
   }
@@ -571,11 +596,73 @@ function writeSaveMode(on, why = '') {
   } catch (e) { return { ok: false, err: e.message }; }
 }
 
+/**
+ * 主脑的越权：所有脑都说不行，但它判断「再不动手服务就没了」时才用。
+ * 现在只开一条：NapCat 断超过 3 分钟、30 分钟内它本来是通的、且 30 分钟内没越权过。
+ * 每次越权都记一条『主脑-越权』，能查、能追。
+ */
+function tryOverride(p, now) {
+  if (p.kind !== 'start-napcat') return '';
+  const downFor = napcatDownSince ? now - napcatDownSince : 0;
+  const wasUp = napcatUpAt && now - napcatUpAt < 30 * 60 * 1000;
+  if (downFor < 3 * 60 * 1000 || !wasUp) return '';
+  if (now - lastOverrideAt < 30 * 60 * 1000) return '';
+  lastOverrideAt = now;
+  decide('主脑-越权', '强行拉起 NapCat', `断了 ${Math.round(downFor / 60000)} 分钟，本来 30 分钟内是通的`);
+  return '主脑越权：服务不能死';
+}
+
+/** 维持：磁盘、自己的内存、左脑健康。这是主脑比所有脑都高的那一层判断 */
+async function maintain(now, lv) {
+  if (now - lastMaintainAt < 5 * 60 * 1000) return;
+  lastMaintainAt = now;
+
+  // 磁盘快满了：不等左手按 10 分钟一轮排队，直接清一轮
+  try {
+    const st = fs.statfsSync ? fs.statfsSync(ROOT) : null;
+    if (st) {
+      const freeGb = (st.bavail * st.bsize) / 1024 / 1024 / 1024;
+      if (freeGb < 2) {
+        const hp = leftHand.plan({ root: ROOT });
+        if (hp.proposals && hp.proposals.length) {
+          for (const p of hp.proposals) {
+            const r = await execute(p);
+            decide('主脑-维持', '磁盘紧张，先清垃圾', `剩 ${freeGb.toFixed(1)}GB，移走 ${r.moved || 0} 个`);
+          }
+        } else {
+          try { fs.writeFileSync(path.join(STATE, 'ALERT-disk.txt'), `[${stamp()}] 磁盘只剩 ${freeGb.toFixed(1)}GB，没有可清的垃圾\n`); } catch {}
+          decide('主脑-维持', '磁盘紧张但没垃圾可清', `剩 ${freeGb.toFixed(1)}GB`);
+        }
+      } else {
+        try { fs.unlinkSync(path.join(STATE, 'ALERT-disk.txt')); } catch {}
+      }
+    }
+  } catch {}
+
+  // 自己的内存涨太大：重启自己（medic 会把它拉回来），别等着被系统换页拖死
+  const rssMb = Math.round(process.memoryUsage().rss / 1048576);
+  if (rssMb > 400) {
+    decide('主脑-维持', '自己内存太大，重启自己', `${rssMb}MB`);
+    try { fs.writeFileSync(path.join(STATE, 'brain-restart-reason.json'), JSON.stringify({ at: new Date().toISOString(), rssMb })); } catch {}
+    setTimeout(() => process.exit(0), 500);
+    return;
+  }
+
+  // 左脑连续抛异常：越权重置它的错误计数，让它重新评估（不绕过它的红线）
+  if (hemis.left.errors >= 3) {
+    decide('主脑-维持', '重置左脑异常计数', `连续 ${hemis.left.errors} 次`);
+    hemis.left.errors = 0;
+  }
+}
+
 async function reviewCycle() {
   const now = Date.now();
   let ports = { napcat: false, bridge: false };
   try { ports.napcat = await portOpen(3000); } catch {}
   try { ports.bridge = await portOpen(3100); } catch {}
+
+  if (ports.napcat) { napcatUpAt = now; napcatDownSince = 0; }
+  else if (!napcatDownSince) napcatDownSince = now;
 
   const lv = evaluateLeft(now, ports);
 
@@ -612,7 +699,11 @@ async function reviewCycle() {
 
   for (const p of rp.proposals) {
     if (hemis.right.status === 'offline' && !p.essential) continue;
-    const verdict = gate(p, lv);
+    let verdict = gate(p, lv);
+    if (!verdict.allow) {
+      const ov = tryOverride(p, now);
+      if (ov) verdict = { allow: true, why: ov, overridden: true };
+    }
     if (!verdict.allow) { noteConflict('right', p.kind, verdict.why || '左脑否决'); continue; }
     const r = await execute(p);
     if (!r.ok && p.essential) log(`执行 ${p.kind} 没成功：${r.err || ''}`);
@@ -630,7 +721,7 @@ async function reviewCycle() {
   }
   let cp = { proposals: [] };
   try {
-    cp = cerebellum.plan({ now, root: ROOT, bridgeState: STATE });
+    cp = cerebellum.plan({ now, root: ROOT, bridgeDir: BRIDGE, bridgeState: STATE });
     hemis.cerebellum.notes = cp.notes || [];
     hemis.cerebellum.metrics = cp.metrics || {};
     hemis.cerebellum.at = now;
@@ -649,7 +740,23 @@ async function reviewCycle() {
     try { cerebellum.feedback(ROOT, p.kind, r.ok !== false); } catch {}
   }
 
+  // ── 左手：清无用文件（每 5 分钟看一次就够，别每轮都扫盘） ────
+  if (now - (lastHandAt || 0) > 5 * 60 * 1000) {
+    lastHandAt = now;
+    try {
+      const hp = leftHand.plan({ root: ROOT });
+      hemis.hands = { files: hp.metrics || {} };
+      for (const p of hp.proposals || []) {
+        const v = gate(p, lv);
+        if (!v.allow) { decide('左手-被拦下', p.why || '', v.why || ''); continue; }
+        await execute(p);
+      }
+      try { leftHand.emptyTrash(ROOT, 30); } catch {}
+    } catch (e) { log('左手出错：' + e.message); }
+  }
+
   lastStack = { napcat: ports.napcat, bridge: ports.bridge };
+  await maintain(now, lv);
   await maybeAlertHemis(now);
   writeStatus(ports);
 }

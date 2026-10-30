@@ -692,6 +692,53 @@ check('小脑的「省着聊」真的会被执行', () => {
   return true;
 });
 
+check('左手只清垃圾，而且删得回来', () => {
+  const f = path.join(ROOT, 'hands', 'left-hand.mjs');
+  if (!fs.existsSync(f)) return '缺 hands/left-hand.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/trash/.test(t)) bad.push('不往 trash 里搬（直接删就没法捞）');
+  if (!/manifest\.json/.test(t)) bad.push('没有清单');
+  if (!/SKIP_DIRS/.test(t)) bad.push('没有跳过 dsh-qq/node_modules');
+  if (!/MAX_FILES/.test(t)) bad.push('没有单次上限');
+  if (!/cpSync/.test(t)) bad.push('跨盘/被占用时没有回退方案');
+  return bad.length === 0 || bad.join('；');
+});
+check('右手删记忆走桥接接口，而且先备份', () => {
+  const f = path.join(ROOT, 'hands', 'right-hand.mjs');
+  if (!fs.existsSync(f)) return '缺 hands/right-hand.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/memory-remove/.test(t)) bad.push('不走 memory-remove（直接改文件会被桥接覆盖）');
+  if (!/backup-/.test(t)) bad.push('删之前没备份');
+  if (!/MAX_REMOVE/.test(t)) bad.push('没有单次上限');
+  if (!/const CATS/.test(t)) bad.push('没限定只处理记忆类别');
+  return bad.length === 0 || bad.join('；');
+});
+check('有一个脱离主脑、能把主脑救回来的急救员', () => {
+  const f = path.join(ROOT, 'medic', 'medic.mjs');
+  if (!fs.existsSync(f)) return '缺 medic/medic.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (/from '\.\.\/brain\.mjs'|from '\.\.\/hemis/.test(t)) bad.push('它依赖主脑代码（主脑坏了它也起不来）');
+  if (!/function brainState\(/.test(t)) bad.push('不判断主脑死活');
+  if (!/frozen/.test(t)) bad.push('不处理卡死');
+  if (!/spawnBrain/.test(t)) bad.push('不会拉起主脑');
+  if (!/ALERT-/.test(t)) bad.push('救不回来时不告警');
+  if (!fs.existsSync(path.join(ROOT, 'medic-start.cmd'))) bad.push('缺 medic-start.cmd（开机靠它起来）');
+  return bad.length === 0 || bad.join('；');
+});
+check('主脑有最高决策权：越权和维持', () => {
+  const t = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  if (!/function tryOverride\(/.test(t)) bad.push('没有越权通道');
+  if (!/主脑-越权/.test(t)) bad.push('越权不留痕');
+  if (!/async function maintain\(/.test(t)) bad.push('没有维持逻辑（磁盘/内存）');
+  if (!/statfs/.test(t)) bad.push('不看磁盘');
+  if (!/memoryUsage\(\)/.test(t)) bad.push('不看自己内存');
+  return bad.length === 0 || bad.join('；');
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {

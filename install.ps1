@@ -474,6 +474,38 @@ if ($DryRun) {
     }
 }
 
+Head '⑦.6 急救员（脱离主脑，负责救主脑）'
+if ($DryRun) {
+    Say '  [plan] 生成 medic-start.cmd + 注册 QQBotMedic（登录后 25 秒）' 'DarkGray'
+} else {
+    # 急救员必须能独立启动：它不 import 主脑任何代码，只认 brain.lock / brain.json。
+    $medicBat = @"
+@echo off
+rem Medic: independent healer. If the brain dies or freezes, this restarts it.
+cd /d "$TargetDir"
+"$nodeExe" "$TargetDir\medic\medic.mjs"
+"@
+    try { [IO.File]::WriteAllText((Join-Path $TargetDir 'medic-start.cmd'), $medicBat, (New-Object System.Text.ASCIIEncoding)) } catch {}
+    $mTask = 'QQBotMedic'
+    Unregister-ScheduledTask -TaskName $mTask -Confirm:$false -ErrorAction SilentlyContinue
+    try {
+        if (Test-Path (Join-Path $TargetDir 'run-hidden.vbs')) {
+            $mAction = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$TargetDir\run-hidden.vbs`" `"$TargetDir\medic-start.cmd`"" -WorkingDirectory $TargetDir
+        } else {
+            $mAction = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$TargetDir\medic-start.cmd`"" -WorkingDirectory $TargetDir
+        }
+        $mLogon = New-ScheduledTaskTrigger -AtLogOn
+        $mLogon.Delay = 'PT25S'
+        $mSet = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+        $mWho = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Limited
+        Register-ScheduledTask -TaskName $mTask -Action $mAction -Trigger $mLogon `
+            -Settings $mSet -Principal $mWho -Force | Out-Null
+        Say '  [OK] 已注册（登录后 25 秒，主脑挂了它负责拉回来）' 'Green'
+    } catch {
+        Say "  [--] 没注册上：$($_.Exception.Message)" 'Yellow'
+    }
+}
 # ── 9. 电源 ─────────────────────────────────────────────────────
 Head '⑧ 电源设置'
 if ($DryRun) { Say '  [plan] 关闭睡眠/休眠 + 关闭快速启动' 'DarkGray' }
