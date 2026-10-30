@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { singleInstance } from '../lock/single.mjs';
-singleInstance('archive');
+// 维护动作（--once / --rebuild / --dedupe）不占实例锁：worker 在跑的时候也能手动修档案
+const MAINT_MODE = process.argv.some((a) => a === '--once' || a === '--rebuild' || a === '--dedupe');
+if (!MAINT_MODE) singleInstance('archive');
 /**
  * chat-archive —— 把她和哥的聊天全量落到 E 盘（按天一个 md），
  * 供 chat_search 工具检索，做到「换会话也不真失忆」。
@@ -40,6 +42,23 @@ function log(...a) {
 
 function clean(s) {
   return String(s || '').replace(/\r/g, '').replace(/\n+/g, ' ').trim().slice(0, 500);
+}
+
+/**
+ * 今天档案里已有的行（"HH:mm|谁|原话"），用来防止两个数据源把同一条写成两行。
+ * 只看最后 400 行足够：一天的消息量远小于这个数，而且越新的越可能重复。
+ */
+function existingLineKeys(day) {
+  const set = new Set();
+  try {
+    const file = path.join(OUT, `${day}.md`);
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n').slice(-400);
+    for (const line of lines) {
+      const m = /^- (\d{2}:\d{2}) \*\*(.+?)\*\*：(.*)$/.exec(line);
+      if (m) set.add(`${m[1]}|${m[2]}|${m[3]}`);
+    }
+  } catch {}
+  return set;
 }
 
 // 一条消息的稳定去重键
@@ -178,6 +197,10 @@ async function tick() {
   const lines = [];
   let added = 0;
   let maxTime = lastTime;
+  // 两个数据源（桥接 recent / QQ 历史）的去重键不一样，同一条消息可能被写成两行。
+  // 2026-10-30 实测：09:44 那句「放心，我这脑子…」在档案里出现了两次。
+  // 所以落盘前再跟「今天档案已有的行」比一次：同一条时间+人+原话就跳过。
+  const exists = existingLineKeys(today());
   for (const m of ordered) {
     const key = msgKey(m);
     if (!key) continue;
@@ -191,12 +214,14 @@ async function tick() {
       continue;
     }
     seen.add(key);
-    added += 1;
-    maxTime = Math.max(maxTime, mt);
     const who = m.isSelf ? selfName : (m.isOwner ? '哥' : (m.sender || m.userId || '?'));
     const text = clean(m.plain || m.text);
     const t = m.time ? hhmm(m.time) : '';
-    lines.push(`- ${t} **${who}**：${text}`);
+    const line = `- ${t} **${who}**：${text}`;
+    if (exists.has(`${t}|${who}|${text}`)) { maxTime = Math.max(maxTime, mt); continue; }
+    added += 1;
+    maxTime = Math.max(maxTime, mt);
+    lines.push(line);
   }
 
   if (lines.length) {
@@ -263,12 +288,46 @@ async function rebuild() {
   log(`已重建 ${day} 档案：${lines.length} 行（最晚 ${hhmm(maxTime)}），游标同步重置`);
 }
 
+/**
+ * --dedupe：去掉同一条消息被两个数据源写成两行的情况。
+ *
+ * 判据：同一行（HH:mm + 谁 + 原话）在 **20 行以内** 再次出现 → 视为重复。
+ * 为什么限定窗口：同一个人在同一分钟真的可能连说两句一样的（比如「嗯」），
+ * 那种通常挨得很近但不会隔 20 行又出现；而两个数据源造成的重复是整批错位复制，
+ * 间隔很小。宁可保守，也别把真话删掉。
+ */
+function dedupe(day) {
+  const file = path.join(OUT, `${day}.md`);
+  if (!fs.existsSync(file)) { log('没有今天的档案，跳过'); return; }
+  const lines = fs.readFileSync(file, 'utf8').split('\n');
+  const lastSeen = new Map();
+  const out = [];
+  let removed = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!/^- \d{2}:\d{2} /.test(line)) { out.push(line); continue; }
+    const prev = lastSeen.get(line);
+    if (prev !== undefined && out.length - prev <= 20) { removed++; continue; }
+    lastSeen.set(line, out.length);
+    out.push(line);
+  }
+  if (!removed) { log(`档案没有重复行（${day}）`); return; }
+  fs.writeFileSync(file, out.join('\n'));
+  log(`已去掉 ${removed} 行重复（${day}），现在 ${out.filter((l) => /^- \d{2}:\d{2} /.test(l)).length} 条`);
+}
+
 const REBUILD = process.argv.includes('--rebuild');
+const DEDUPE = process.argv.includes('--dedupe');
 const ONCE = process.argv.includes('--once');
 
 await resolveSelfName();
 if (REBUILD) {
   await rebuild();
+  process.exit(0);
+}
+if (DEDUPE) {
+  const dayArg = (process.argv.find((a) => /^--day=\d{4}-\d{2}-\d{2}$/.test(a)) || '').slice(6) || today();
+  dedupe(dayArg);
   process.exit(0);
 }
 log(`聊天归档${ONCE ? '（单次）' : ''}启动：${KEY} → ${OUT}，每 ${INTERVAL / 1000}s`);

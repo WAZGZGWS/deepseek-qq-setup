@@ -304,6 +304,13 @@ check('余额告警在回升后会撤掉', () => {
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
   return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
 });
+check('档案落盘前会跟已有行去重', () => {
+  // 2026-10-30：桥接 recent 和 QQ 历史两个来源的去重键不同，同一条被写成两行
+  // （今天 19 行重复、昨天 69 行），检索时看着像她说了两遍。
+  const s = fs.readFileSync(path.join(ROOT, 'archive', 'collector.mjs'), 'utf8');
+  const ok = /function existingLineKeys/.test(s) && /exists\.has\(/.test(s) && /--dedupe/.test(s);
+  return ok || '归档器没有落盘前去重（会写出重复行）';
+});
 check('午后有健康快照（失联当天能定位）', () => {
   // 2026-10-29：这四天下午失联，晚上回来只剩「猜」——是机器睡了还是被 QQ 踢了？
   const c = fs.readFileSync(path.join(ROOT, 'cron', 'cron.mjs'), 'utf8');
