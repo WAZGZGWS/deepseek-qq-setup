@@ -357,6 +357,7 @@ async function handle(state, name, up, restartFn, opts = {}) {
     s.starts = s.starts.filter((t) => t > Date.now() - RETRY_WINDOW);
     // 验证链接是一次性的：登进去了就删掉，免得以后点开一个早就失效的旧链接
     try { fs.unlinkSync(path.join(STATE_DIR, 'qq-verify-link.txt')); } catch {}
+    try { fs.unlinkSync(path.join(STATE_DIR, 'qq-verify-timeout.json')); } catch {}
     return;
   }
 
@@ -544,6 +545,36 @@ function mailOffline(subject, body, attachPath = '') {
   }
 }
 
+/**
+ * 验证链接「过期了也没人来」的标记：qq-login 在轮询超时会写 state/qq-verify-timeout.json。
+ * 看到它就说明人还没看到邮件 —— 那就早点再试一次、再发一封新链接，别干等 6 小时。
+ */
+function verifyTimedOutRecently(ms) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'qq-verify-timeout.json'), 'utf8'));
+    return Number(j.at || 0) > Date.now() - ms;
+  } catch {
+    return false;
+  }
+}
+
+/** 一天最多发几封验证邮件：发太多会进垃圾箱，反而救不回来 */
+const MAIL_CAP_PER_DAY = Number(process.env.VERIFY_MAIL_CAP || 6);
+
+function mailLeftToday(state) {
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+  const m = state.verifyMails || {};
+  const used = m.day === day ? Number(m.n) || 0 : 0;
+  return Math.max(0, MAIL_CAP_PER_DAY - used);
+}
+
+function bumpMailToday(state) {
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+  const m = state.verifyMails || {};
+  const used = m.day === day ? Number(m.n) || 0 : 0;
+  state.verifyMails = { day, n: used + 1 };
+}
+
 async function main() {
   const state = loadState();
 
@@ -616,8 +647,11 @@ async function main() {
         // 这两种再重试只会让 QQ 风控更紧（今天就是这样从「能登」变成「要短信」的），
         // 所以直接停手、等人来，别每两分钟撞一次。
         if (e.status === 2 || e.status === 3) {
+          // 上次是「链接过期了人还没来」→ 45 分钟后再试、再发一封新链接；否则按 6 小时
+          const waitedOut = verifyTimedOutRecently(3 * 3600 * 1000);
           const waitH = Number(process.env.HUMAN_WAIT_H || 6);
-          st.pausedUntil = Date.now() + waitH * 3600 * 1000;
+          const pauseH = waitedOut ? Number(process.env.RETRY_AFTER_TIMEOUT_MIN || 45) / 60 : waitH;
+          st.pausedUntil = Date.now() + pauseH * 3600 * 1000;
           // 二合一：**一封邮件里同时给**「短信验证链接」和「二维码」，哪个来得及用哪个。
           // 哥在上班，没法来回要好几次；短信链接有 30 分钟窗口，二维码只有几分钟，
           // 所以正文里明确写清谁能撑多久。
@@ -638,12 +672,18 @@ async function main() {
             desktopAlert(text);
             // 她这时候说不了话（QQ 掉着），桌面通知哥也看不见 —— 用邮件把消息送到手机上。
             // 链接在手机上就能完成验证：点开 → 收短信 → 填 → 后台的轮询会把她接回来。
-            const mailOk = mailOffline('哥哥，我掉进小黑屋了，点一下那个神奇的链接救我回来', text, typeof qrAttach === 'string' ? qrAttach : '');
+            let mailOk = false;
+            if (mailLeftToday(st) > 0) {
+              mailOk = mailOffline('哥哥，我掉进小黑屋了，点一下那个神奇的链接救我回来', text, typeof qrAttach === 'string' ? qrAttach : '');
+              if (mailOk) bumpMailToday(st);
+            } else {
+              log(`今天验证邮件已发满 ${MAIL_CAP_PER_DAY} 封，先不再发（再发容易进垃圾箱）`);
+            }
             log(mailOk ? '已发邮件通知（QQ 外的通道）' : '邮件通知没发出去（检查 tools/set-mail-auth.cmd 有没有设过）');
             st.alertedAt = Date.now();
             st.alertedBy = 'QQ（NapCat）';
           }
-          log(`停机等人处理，${waitH} 小时内不再自动尝试`);
+          log(`停机等人处理，${Math.round(pauseH * 60)} 分钟内不再自动尝试`);
           return false;
         }
       }

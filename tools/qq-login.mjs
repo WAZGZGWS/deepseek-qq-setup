@@ -161,7 +161,14 @@ async function passwordLogin() {
         if (d.isLogin) { console.log('验证通过，已登录'); return true; }
         if (d.loginError) { console.log('登录报错：' + d.loginError); break; }
       }
-      console.log('轮询超时（还没登进去）。验证链接可能过期了，重跑一次会生成新链接。');
+console.log('轮询超时（还没登进去）。验证链接可能过期了，重跑一次会生成新链接。');
+      // 留个标记：巡检看到它就知道「链接过期了、人还没来」，可以早点再发一封新链接，
+      // 不用干等 6 小时（人在上班时，一天里得有机会被叫到几次才行）。
+      try {
+        fs.mkdirSync(path.dirname(QR_FILE), { recursive: true });
+        fs.writeFileSync(path.join(path.dirname(QR_FILE), 'qq-verify-timeout.json'),
+          JSON.stringify({ at: Date.now(), uin, reason: 'poll-timeout' }) + '\n', 'utf8');
+      } catch {}
       process.exitCode = 2;
       return false;
     }

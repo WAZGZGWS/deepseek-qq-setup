@@ -353,6 +353,17 @@ check('余额告警在回升后会撤掉', () => {
   const lenient = /放宽日：撤掉旧的余额告警文件/.test(s);
   return (back && lenient) || '余额回升/放宽日时没有撤掉 ALERT-balance.txt';
 });
+check('链接过期会自动再发一封（不用干等 6 小时）', () => {
+  // 2026-10-30：人在上班，30 分钟没看手机链接就废了；以前下一次要等 6 小时。
+  const login = fs.readFileSync(path.join(ROOT, 'tools', 'qq-login.mjs'), 'utf8');
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  const bad = [];
+  if (!/qq-verify-timeout\.json/.test(login)) bad.push('轮询超时没留标记');
+  if (!/verifyTimedOutRecently/.test(doc)) bad.push('巡检没读超时标记');
+  if (!/pauseH/.test(doc)) bad.push('超时后没缩短重试间隔');
+  if (!/mailLeftToday/.test(doc)) bad.push('邮件没有每日上限');
+  return bad.length === 0 || bad.join('；');
+});
 check('掉线能用邮件找到哥（不依赖 QQ 的通道）', () => {
   // 2026-10-30：她掉线时在 QQ 上一个字都发不出去，验证链接只能躺在电脑里，哥在上班就废了。
   if (!fs.existsSync(path.join(ROOT, 'tools', 'notify-offline.mjs'))) return '缺少 tools/notify-offline.mjs';
