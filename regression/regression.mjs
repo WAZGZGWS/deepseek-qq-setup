@@ -835,6 +835,45 @@ check('降占用只碰自己的器官，不碰桥接和 QQ', () => {
   return bad.length === 0 || bad.join('；');
 });
 
+check('理性：死掉/没用的脚本搬走并留下病因', () => {
+  const L = path.join(ROOT, 'logic', 'organs.mjs');
+  if (!fs.existsSync(L)) return '缺 logic/organs.mjs';
+  const t = fs.readFileSync(L, 'utf8');
+  const bad = [];
+  if (!/function rationalPlan/.test(t)) bad.push('没有理性清理');
+  if (!/function recordAutopsy/.test(t)) bad.push('不记病因');
+  if (!/autopsy\.json/.test(t)) bad.push('病因不落盘（主脑存取不了）');
+  if (!/function referenced\(/.test(t)) bad.push('不检查是否还被引用（会把在用的删掉）');
+  if (!/trash-legacy/.test(t)) bad.push('清理不走 trash（删了捞不回来）');
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  if (!/主脑-理性清理/.test(b)) bad.push('主脑不执行理性清理');
+  if (!/leftHand\.apply/.test(b)) bad.push('主脑没用左手搬');
+  return bad.length === 0 || bad.join('；');
+});
+check('创造：只往 tools/gen 加，不覆盖、不碰核心代码', () => {
+  const t = fs.readFileSync(path.join(ROOT, 'logic', 'organs.mjs'), 'utf8');
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  if (!/function creationPlan/.test(t)) bad.push('没有创造逻辑');
+  if (!/tools', 'gen'/.test(t)) bad.push('生成物不在 tools/gen');
+  if (!/recordCreated/.test(t)) bad.push('不记录造过什么');
+  if (!/if \(fs\.existsSync\(abs\)\) continue/.test(b)) bad.push('会覆盖已有文件');
+  if (!/主脑-创造工具/.test(b)) bad.push('主脑不执行创造');
+  return bad.length === 0 || bad.join('；');
+});
+check('喜悦：连续正常一周才激励，而且有免检期', () => {
+  const t = fs.readFileSync(path.join(ROOT, 'logic', 'organs.mjs'), 'utf8');
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  if (!/REWARD_MS = 7 \* DAY/.test(t)) bad.push('不是按 7 天算');
+  if (!/function joyPlan/.test(t)) bad.push('没有喜悦逻辑');
+  if (!/reward-organ/.test(t)) bad.push('不产出激励');
+  if (!/rewardedUntil/.test(b)) bad.push('激励不生效（该免检时还在压它）');
+  if (!/主脑-喜悦/.test(b)) bad.push('激励不留痕');
+  if (!/function recordReward/.test(t)) bad.push('激励不落盘');
+  return bad.length === 0 || bad.join('；');
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {

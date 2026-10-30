@@ -37,6 +37,7 @@ let right = await import('./hemis/right.mjs');
 let cerebellum = await import('./hemis/cerebellum.mjs');
 import * as leftHand from './hands/left-hand.mjs';
 import * as rightHand from './hands/right-hand.mjs';
+import * as organLogic from './logic/organs.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BRAIN_STATE = path.join(STATE, 'brain.json');
@@ -192,7 +193,7 @@ function writeStatus(extra = {}) {
       },
       conflicts: conflicts.slice(-5),
     },
-    resources: extra.resources !== undefined ? extra.resources : lastResources,
+    resources: (Array.isArray(extra.resources) && extra.resources.length) ? extra.resources : lastResources,
     recentDecisions: decisions.slice(-5),
     ...extra,
   };
@@ -978,7 +979,8 @@ async function watchResources(now) {
 
   for (const k of keep) {
     const role = k.role;
-    const hot = k.rssMb > RSS_WARN_MB || k.cpuPct > CPU_WARN_PCT;
+    const rewarded = rewardedUntil.has(role) && now < rewardedUntil.get(role);
+    const hot = !rewarded && (k.rssMb > RSS_WARN_MB || k.cpuPct > CPU_WARN_PCT);
     const streak = hot ? (cpuStreak.get(role) || 0) + 1 : 0;
     cpuStreak.set(role, streak);
 
@@ -1021,6 +1023,60 @@ async function watchResources(now) {
   }
 
   return keep;
+}
+
+// ── 主脑三条逻辑：理性（尸检清理）/ 创造（造工具）/ 喜悦（激励） ──────
+
+const rewardedUntil = new Map();
+let lastLogicAt = 0;
+
+async function runLogic(now) {
+  if (now - lastLogicAt < 10 * 60 * 1000) return;
+  lastLogicAt = now;
+
+  // 理性：把已死/无用脚本搬进 trash + 记病因
+  try {
+    const rp = organLogic.rationalPlan({ root: ROOT });
+    for (const p of rp.proposals || []) {
+      const r = leftHand.apply(ROOT, p.items || []);
+      if (r.ok && r.moved) {
+        const n = organLogic.recordAutopsy(STATE, p.autopsy || []);
+        decide('主脑-理性清理', `退役 ${r.moved} 个（病因已存档 ${n} 条）`, p.why || '');
+      }
+    }
+  } catch (e) { log('理性逻辑出错：' + e.message); }
+
+  // 创造：反复出现的需求才造工具，只新增不覆盖
+  try {
+    const cp = organLogic.creationPlan({ root: ROOT, stateDir: STATE, decisions });
+    for (const p of cp.proposals || []) {
+      const abs = path.join(ROOT, p.rel || '');
+      if (fs.existsSync(abs)) continue; // 不覆盖
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, p.code || '');
+      organLogic.recordCreated(STATE, p.name, p.rel, p.why);
+      decide('主脑-创造工具', p.name + ' → ' + p.rel, p.why || '');
+    }
+  } catch (e) { log('创造逻辑出错：' + e.message); }
+
+  // 喜悦：连续正常 7 天，给一次激励
+  try {
+    const healthy = [];
+    for (const o of ['eye', 'medic', 'mouth']) {
+      let pid = 0;
+      try { pid = Number(fs.readFileSync(path.join(STATE, `${o}.lock`), 'utf8').trim()) || 0; } catch {}
+      if (pid && pidAlive(pid)) healthy.push({ role: o, healthy: true });
+    }
+    healthy.push({ role: 'brain', healthy: true });
+    for (const w of workers) if (w.child && w.child.exitCode === null && !w.quarantineUntil) healthy.push({ role: 'worker:' + w.name, healthy: true });
+
+    const jp = organLogic.joyPlan({ stateDir: STATE, now, healthy });
+    for (const p of jp.proposals || []) {
+      rewardedUntil.set(p.organ, p.until);
+      organLogic.recordReward(STATE, p.organ, p.why, p.until);
+      decide('主脑-喜悦', `奖励 ${p.organ}`, `${p.why}，24 小时内不压它`);
+    }
+  } catch (e) { log('喜悦逻辑出错：' + e.message); }
 }
 
 async function reviewCycle() {
@@ -1136,6 +1192,7 @@ async function reviewCycle() {
   const mouth = readMouth(now);
   await watchOrgans(mouth, now);
   const res = await watchResources(now);
+  await runLogic(now);
   await discipline(now, ports);
   await maintain(now, lv);
   await maybeAlertHemis(now);
