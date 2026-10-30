@@ -110,7 +110,12 @@ try {
     text: body,
     attachments,
   });
-  log(`已发邮件 → ${TO}${attachments.length ? `（含附件 ${attachments.length} 个）` : ''}（${info.messageId || 'ok'}）`);
+  // 把 SMTP 的「谁收下了、谁被拒了」写进日志：只写「已发」不够 ——
+  // 2026-10-30 出现过服务端 250 接受、但邮箱里找不到（进了垃圾箱/被过滤），
+  // 没有 accepted/rejected 这层信息根本判断不了。
+  const accepted = Array.isArray(info.accepted) ? info.accepted.join(',') : String(info.accepted ?? '');
+  const rejected = Array.isArray(info.rejected) ? info.rejected.join(',') : String(info.rejected ?? '');
+  log(`已发邮件 → ${TO}${attachments.length ? `（含附件 ${attachments.length} 个）` : ''} accepted=[${accepted}] rejected=[${rejected}] resp=${String(info.response || '').slice(0, 80)}`);
   process.exit(0);
 } catch (e) {
   log('发邮件失败：' + String(e.message || e).slice(0, 200));

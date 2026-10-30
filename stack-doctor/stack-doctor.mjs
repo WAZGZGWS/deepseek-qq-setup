@@ -550,6 +550,30 @@ async function main() {
   // 0. 先把「闪黑框」的计划任务改成静默（提权时才做，见函数注释）
   ensureSilentTasks(state);
 
+  // 0.5 手动强制重登：放一个 state/relogin.flag，本脚本（以管理员跑）负责杀掉 QQ 进程树。
+  //     为什么需要它：NapCat 注入在 QQ.exe 里，登录态就在那个进程；普通权限杀不掉，
+  //     而「模拟一次真实掉线」和「她卡住了要硬重登」都得靠提权这一下。
+  const reloginFlag = path.join(STATE_DIR, 'relogin.flag');
+  if (fs.existsSync(reloginFlag)) {
+    const fresh = Date.now() - fs.statSync(reloginFlag).mtimeMs < 10 * 60 * 1000;
+    try {
+      if (!fresh) throw new Error('flag 太旧（超过 10 分钟），不执行');
+      const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+      const pids = [...out.matchAll(/"QQ\.exe","(\d+)"/gi)].map((m) => m[1]);
+      for (const pid of pids) {
+        try { execFileSync('taskkill', ['/PID', pid, '/F', '/T'], { windowsHide: true, timeout: 20000 }); } catch {}
+      }
+      state.napcat.pausedUntil = 0;
+      state.napcat.fails = 0;
+      state.napcat.downSince = 0;
+      state.napcat.alertedAt = 0;
+      log(`手动重登：已结束 ${pids.length} 个 QQ 进程，等看门狗拉起/自动登录`);
+    } catch (e) {
+      log('手动重登失败：' + String(e.message || e).slice(0, 140));
+    }
+    try { fs.unlinkSync(reloginFlag); } catch {}
+  }
+
   // 1. NapCat
   const nc = await probeNapcat();
   await handle(state, 'napcat', nc.ok, async (st) => {
@@ -637,7 +661,23 @@ async function main() {
       log('QQ 进程已经在跑（可能正在登录），不再开第二个，等下一轮');
       return false;
     }
-    return spawnDetached('cmd.exe', ['/c', `"${BOOT_BAT}" -y`], { cwd: path.dirname(BOOT_BAT), windowsHide: false });
+    // 2026-10-30 演练抓到的真 bug：以前这里是 spawnDetached('cmd.exe', ['/c', boot.bat])。
+    // 巡检本身是提权跑的（Highest），从提权上下文直接拉 QQ —— 静静失败：
+    // 日志写「已拉起」，QQ 进程数一直是 0，人不在就干等。改成跟桥接/后台脚本一样的做法：
+    // explorer 代开，退回普通用户权限（QQ 必须在登录会话里跑）。
+    const launched = launchAsUserVia(BOOT_BAT, '-y');
+    log(launched ? '已用普通用户权限拉起 NapCat（explorer 代开）' : '拉起 NapCat 失败（explorer 代开没成功）');
+    if (!launched) return false;
+    // QQ 启动 + 登录要几十秒，12 秒就判死太早，这里最多等 60 秒
+    for (let i = 0; i < 12; i += 1) {
+      await sleep(5000);
+      if ((await probeNapcat()).ok) {
+        log('NapCat 已回来');
+        return true;
+      }
+    }
+    log('拉起后 60 秒仍未通，等下一轮');
+    return false;
   }, {
     label: 'QQ（NapCat）',
     why: nc.why,

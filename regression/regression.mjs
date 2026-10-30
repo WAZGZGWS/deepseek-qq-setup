@@ -358,6 +358,14 @@ check('午后有健康快照（失联当天能定位）', () => {
   const ok = /snap-lunch/.test(c) && /snap-afternoon/.test(c) && fs.existsSync(path.join(ROOT, 'tools', 'health-snapshot.mjs'));
   return ok || '没有午后快照：下午失联只能事后猜';
 });
+check('巡检拉起 NapCat 用普通用户权限（提权拉不起来）', () => {
+  // 2026-10-30 演练抓到的真 bug：巡检是 Highest 权限跑的，从提权上下文 spawn 批处理去拉 QQ
+  // 静静失败 —— 日志写「已拉起」，QQ 进程数一直是 0。改成 explorer 代开（普通用户权限）后，
+  // 实测 10 秒回来。
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  const ok = /launchAsUserVia\(BOOT_BAT/.test(doc) && !/spawnDetached\('cmd\.exe', \['\/c', "\$\{BOOT_BAT\}"/.test(doc);
+  return ok || '拉 NapCat 还用提权 spawn：日志会写已拉起，实际什么都没起';
+});
 check('掉线先试快速登录（不触发短信）', () => {
   // 2026-10-29：下午被踢后密码登录几乎必然要短信，人不在就整下午失联。
   // 本机 ticket 有时还有效，先试它一次成本极低，成了她就自己回来了。
