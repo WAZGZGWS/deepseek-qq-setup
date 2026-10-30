@@ -695,6 +695,46 @@ async function main() {
         const msg = String((e.stdout || '') + (e.stderr || '') || e.message).trim().split('\n').filter(Boolean).pop();
         log('快速登录没成：' + String(msg).slice(0, 160));
       }
+// ── 防封号三件套：次数预算 / 夜间静默 / 超限主动下线 ──────────────
+      // 今天（2026-10-30）就是反面教材：11:25~11:40 连着试了十几次，
+      // 风控从短信升级成识图验证、再到长时间冷却。次数必须有上限。
+      const dayKey = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+      const lb = st.loginBudget && st.loginBudget.day === dayKey ? st.loginBudget : { day: dayKey, n: 0 };
+      st.loginBudget = lb;
+      const LOGIN_CAP = Number(process.env.LOGIN_ATTEMPT_CAP || 3);
+      const hourNow = Number(new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour12: false }).slice(0, 2));
+      const nightQuiet = hourNow >= 23 || hourNow < 7;
+
+      if (lb.n >= LOGIN_CAP) {
+        const until = new Date();
+        until.setDate(until.getDate() + 1);
+        until.setHours(7, 0, 0, 0);
+        st.pausedUntil = until.getTime();
+        log(`今天密码登录已试 ${lb.n} 次（上限 ${LOGIN_CAP}），主动下线、不再尝试，等明天或人工处理`);
+        // 「该下线的就下线」：把她从二维码界面撤下来，别一直挂着诱导重试
+        try {
+          const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+          for (const m of out.matchAll(/"QQ\.exe","(\d+)"/gi)) { try { execFileSync('taskkill', ['/PID', m[1], '/F', '/T'], { windowsHide: true, timeout: 15000 }); } catch {} }
+          log('已把 QQ 客户端下线（避免持续重登刺激风控）');
+        } catch {}
+        if (Date.now() - st.alertedAt > 6 * 3600 * 1000) {
+          const txt = `哥哥，我今天已经试了 ${lb.n} 次登录都不行，先把自己下线了，别管我。\n\n明天再试，或者你有空的时候扫一次码。\n页面：http://127.0.0.1:7788`;
+          try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${txt}\n`); } catch {}
+          mailOffline('哥哥我今天先下线了（试太多次怕被风控）', txt);
+          st.alertedAt = Date.now();
+          st.alertedBy = 'QQ（NapCat）';
+        }
+        return false;
+      }
+      if (nightQuiet) {
+        const until = new Date();
+        if (hourNow >= 23) until.setDate(until.getDate() + 1);
+        until.setHours(7, 0, 0, 0);
+        st.pausedUntil = until.getTime();
+        log(`现在是夜间（${hourNow} 点），不自动登录，等 7 点后再试`);
+        return false;
+      }
+
       // 1) 再走密码登录
       try {
         const out = execFileSync(process.execPath, [qqLogin, 'password'], {
@@ -707,7 +747,8 @@ async function main() {
         if (last) log('密码登录：' + last.slice(0, 160));
       } catch (e) {
         const msg = String((e.stdout || '') + (e.stderr || '') || e.message).trim().split('\n').filter(Boolean).pop();
-        log('密码登录失败：' + String(msg).slice(0, 160));
+        lb.n += 1;
+        log('密码登录失败：' + String(msg).slice(0, 160) + `（今天第 ${lb.n}/${LOGIN_CAP} 次）`);
 
         // 退出码 2 = 要短信/验证码，3 = 要新设备扫码。
         // 这两种再重试只会让 QQ 风控更紧（今天就是这样从「能登」变成「要短信」的），
@@ -726,6 +767,7 @@ async function main() {
           let qrUrl = '';
           try { qrUrl = String(fs.readFileSync(path.join(STATE_DIR, 'napcat-qrcode.txt'), 'utf8')).trim().split('\n')[0]; } catch {}
           const parts = [];
+parts.push('（先别急着点：她可能已经自己回来了 —— 给她发条消息，或打开 http://127.0.0.1:7788 看是不是「已登录」。这条链接只对最近一次尝试有效，旧邮件里的点不开是正常的。）');
           parts.push('哥哥，我掉进小黑屋了，自己出不来。');
           if (smsLink) parts.push(`① 点这个神奇的链接（30 分钟内有效，推荐）：\n${smsLink}\n→ 点开、收个验证码、填进去就行，我在这边等着。`);
           if (qrUrl) parts.push(`② 或者扫这个码（几分钟就过期，赶不上就用①）：\n${qrUrl}\n→ 旁边有别的设备就扫它；没有就直接点这条。`);

@@ -372,6 +372,15 @@ check('登录成功后清掉多余 QQ 实例', () => {
   const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
   return /killStrayQQ/.test(doc) && /if \(nc\.ok\) killStrayQQ\(\)/.test(doc) || '巡检没清理多余实例（会互相踢）';
 });
+check('有防封号的三道闸（次数/夜间/主动下线）', () => {
+  // 2026-10-30 的反面教材：11:25~11:40 连续试了十几次，风控从短信升到识图、再到长冷却。
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  const bad = [];
+  if (!/LOGIN_ATTEMPT_CAP/.test(doc) || !/loginBudget/.test(doc)) bad.push('没有每日登录次数预算');
+  if (!/nightQuiet/.test(doc)) bad.push('夜间没有静默（会被半夜验证）');
+  if (!/主动下线/.test(doc)) bad.push('超限没有主动下线');
+  return bad.length === 0 || bad.join('；');
+});
 check('掉线邮件里带扫码页链接，且页面会自己拉起来', () => {
   // 2026-10-30：哥要求把「会自己刷新二维码」的页面链接也塞进掉线邮件。
   const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
