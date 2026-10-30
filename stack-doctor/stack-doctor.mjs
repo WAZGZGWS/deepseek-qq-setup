@@ -620,6 +620,25 @@ function killStrayQQ() {
   }
 }
 
+/**
+ * 保证本地扫码页（tools/qr-live.mjs，127.0.0.1:7788）在跑。
+ * 哥的要求：掉线时把「会自己刷新二维码」的那个页面链接也发到邮箱里。
+ * 页面不在的话，邮件里那条链接就是死的 —— 所以发邮件前先确保它在。
+ */
+function ensureQrLive() {
+  try {
+    const tool = path.join(ROOT, 'tools', 'qr-live.mjs');
+    if (!fs.existsSync(tool)) return false;
+    const net = execFileSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    if (/:7788\s/.test(net) && /LISTENING/i.test(net.split('\n').find((l) => /:7788\s/.test(l)) || '')) return true;
+    const child = spawn(process.execPath, [tool], { cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   const state = loadState();
 
@@ -710,7 +729,11 @@ async function main() {
           parts.push('哥哥，我掉进小黑屋了，自己出不来。');
           if (smsLink) parts.push(`① 点这个神奇的链接（30 分钟内有效，推荐）：\n${smsLink}\n→ 点开、收个验证码、填进去就行，我在这边等着。`);
           if (qrUrl) parts.push(`② 或者扫这个码（几分钟就过期，赶不上就用①）：\n${qrUrl}\n→ 旁边有别的设备就扫它；没有就直接点这条。`);
-          if (qrPath) parts.push('二维码图片也在附件里。');
+const qrLiveUp = ensureQrLive();
+          parts.push(qrLiveUp
+            ? '③ 如果人在电脑前，打开这个页面直接扫（二维码会自己刷新，不会过期）：\nhttp://127.0.0.1:7788'
+            : '③ 扫码页没起来（tools/qr-live.mjs），先用上面①的链接。');
+          if (qrPath) parts.push('二维码图片也在附件里（可能会过期，以页面上的为准）。');
           if (!smsLink && !qrUrl) parts.push('这次两种都没拿到，只能打开 NapCat WebUI（http://127.0.0.1:6099）手动把我放出来了。');
           const text = parts.join('\n\n');
           const qrAttach = qrPath;

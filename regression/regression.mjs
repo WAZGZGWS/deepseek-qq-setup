@@ -372,6 +372,14 @@ check('登录成功后清掉多余 QQ 实例', () => {
   const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
   return /killStrayQQ/.test(doc) && /if \(nc\.ok\) killStrayQQ\(\)/.test(doc) || '巡检没清理多余实例（会互相踢）';
 });
+check('掉线邮件里带扫码页链接，且页面会自己拉起来', () => {
+  // 2026-10-30：哥要求把「会自己刷新二维码」的页面链接也塞进掉线邮件。
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  const bad = [];
+  if (!/ensureQrLive/.test(doc)) bad.push('巡检没确保扫码页在跑');
+  if (!/127\.0\.0\.1:7788/.test(doc)) bad.push('邮件正文没有扫码页链接');
+  return bad.length === 0 || bad.join('；');
+});
 check('扫码页会自己刷新（码不会过期）', () => {
   const f = path.join(ROOT, 'tools', 'qr-live.mjs');
   if (!fs.existsSync(f)) return '缺少 tools/qr-live.mjs';
