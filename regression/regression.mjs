@@ -353,6 +353,31 @@ check('余额告警在回升后会撤掉', () => {
   const lenient = /放宽日：撤掉旧的余额告警文件/.test(s);
   return (back && lenient) || '余额回升/放宽日时没有撤掉 ALERT-balance.txt';
 });
+check('启动 NapCat 只有一个入口（防止两个实例抢号）', () => {
+  // 2026-10-30：巡检每 2 分钟拉起 + 手动拉起 → 两棵树互相踢，二维码刚扫就失效。
+  const starter = path.join(ROOT, 'tools', 'napcat-start.mjs');
+  if (!fs.existsSync(starter)) return '缺少 tools/napcat-start.mjs';
+  const s = fs.readFileSync(starter, 'utf8');
+  const bat = fs.readFileSync(path.join(ROOT, 'napcat-boot.bat'), 'utf8');
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  const bad = [];
+  if (!/singleInstance\('napcat-start'\)/.test(s)) bad.push('启动器没加锁');
+  if (!/qqRunning/.test(s)) bad.push('启动器没检查 QQ 进程');
+  if (!/portOpen\(3000\)/.test(s)) bad.push('启动器没检查 3000');
+  if (!/napcat-start\.mjs/.test(bat)) bad.push('napcat-boot.bat 没走启动器');
+  if (!/napcat-start\.mjs/.test(doc)) bad.push('巡检没走启动器');
+  return bad.length === 0 || bad.join('；');
+});
+check('登录成功后清掉多余 QQ 实例', () => {
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  return /killStrayQQ/.test(doc) && /if \(nc\.ok\) killStrayQQ\(\)/.test(doc) || '巡检没清理多余实例（会互相踢）';
+});
+check('扫码页会自己刷新（码不会过期）', () => {
+  const f = path.join(ROOT, 'tools', 'qr-live.mjs');
+  if (!fs.existsSync(f)) return '缺少 tools/qr-live.mjs';
+  const s = fs.readFileSync(f, 'utf8');
+  return /RefreshQRcode/.test(s) && /setInterval/.test(s) || '扫码页没有自动刷新';
+});
 check('链接过期会自动再发一封（不用干等 6 小时）', () => {
   // 2026-10-30：人在上班，30 分钟没看手机链接就废了；以前下一次要等 6 小时。
   const login = fs.readFileSync(path.join(ROOT, 'tools', 'qq-login.mjs'), 'utf8');

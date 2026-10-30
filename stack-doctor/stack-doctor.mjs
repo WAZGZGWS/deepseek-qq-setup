@@ -575,6 +575,51 @@ function bumpMailToday(state) {
   state.verifyMails = { day, n: used + 1 };
 }
 
+/**
+ * 只保留「持有 3000 端口」的那一棵 QQ 进程树，其余杀掉。
+ *
+ * 用户的原始要求：一个登录成，另一个自动下线。
+ * 2026-10-30 实测过「两棵 QQ 树」的后果：互相踢 → 会话被注销 → 二维码刚扫就失效。
+ * 判断依据用端口所有者的 pid，而不是进程数量：只有真正在服务的那个才配留下。
+ */
+function killStrayQQ() {
+  try {
+    const net = execFileSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+    const line = net.split('\n').find((l) => /:3000\s/.test(l) && /LISTENING/i.test(l));
+    const owner = line ? Number(line.trim().split(/\s+/).pop()) : 0;
+    const raw = execFileSync('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+    const procs = [...raw.matchAll(/"QQ\.exe","(\d+)","(\d+)"/gi)].map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]) }));
+    if (procs.length <= 1) return 0;
+    const byPid = new Map(procs.map((p) => [p.pid, p]));
+    const keep = new Set();
+    if (owner && byPid.has(owner)) {
+      let cur = owner;
+      while (byPid.has(cur) && !keep.has(cur)) { keep.add(cur); cur = byPid.get(cur).ppid; }
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const p of procs) if (!keep.has(p.pid) && keep.has(p.ppid)) { keep.add(p.pid); changed = true; }
+      }
+    } else {
+      const roots = procs.filter((p) => !byPid.has(p.ppid));
+      if (roots.length) keep.add(roots[0].pid);
+    }
+    let killed = 0;
+    for (const p of procs) {
+      if (keep.has(p.pid)) continue;
+      if (byPid.has(p.ppid) && !keep.has(p.ppid)) continue; // 等它爹被整树杀掉
+      try {
+        execFileSync('taskkill', ['/PID', String(p.pid), '/F', '/T'], { windowsHide: true, timeout: 20000 });
+        killed += 1;
+      } catch {}
+    }
+    if (killed) log(`清理了 ${killed} 个多余 QQ 实例（只留持有 3000 端口的那棵）`);
+    return killed;
+  } catch {
+    return 0;
+  }
+}
+
 async function main() {
   const state = loadState();
 
@@ -607,6 +652,8 @@ async function main() {
 
   // 1. NapCat
   const nc = await probeNapcat();
+  // 她在线时顺手清掉多余实例：一个登录成，其它自动下线（2026-10-30：两棵树互相踢，扫一次失效一次）
+  if (nc.ok) killStrayQQ();
   await handle(state, 'napcat', nc.ok, async (st) => {
     // 设过密码的话，先走「密码登录」：不弹二维码、不用碰手机
     // （只在 NapCat 进程活着、WebUI 能连上时才有意义）
@@ -705,7 +752,16 @@ async function main() {
     // 巡检本身是提权跑的（Highest），从提权上下文直接拉 QQ —— 静静失败：
     // 日志写「已拉起」，QQ 进程数一直是 0，人不在就干等。改成跟桥接/后台脚本一样的做法：
     // explorer 代开，退回普通用户权限（QQ 必须在登录会话里跑）。
-    const launched = launchAsUserVia(BOOT_BAT, '-y');
+    // 统一走带锁的启动器：已在跑 / QQ 进程已在 → 直接退出，避免两个实例抢号
+    const launcher = path.join(ROOT, 'tools', 'napcat-start.mjs');
+    let launched = false;
+    try {
+      execFileSync(process.execPath, [launcher, '--as-user'], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
+      launched = true;
+    } catch (e) {
+      log('启动器退出异常：' + String(e.message || e).slice(0, 120));
+      launched = launchAsUserVia(BOOT_BAT, '-y');
+    }
     log(launched ? '已用普通用户权限拉起 NapCat（explorer 代开）' : '拉起 NapCat 失败（explorer 代开没成功）');
     if (!launched) return false;
     // QQ 启动 + 登录要几十秒，12 秒就判死太早，这里最多等 60 秒
