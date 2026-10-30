@@ -140,6 +140,8 @@ async function passwordLogin() {
   if (!uin) throw new Error('没从启动脚本里找到机器人 QQ 号（找 `-q <号>`）');
   const md5 = crypto.createHash('md5').update(readPassword()).digest('hex');
   const cred = await auth();
+  // 先刷新一次客户端二维码状态：否则登录请求通过、验证也做完时，客户端那边往往已经「二维码过期」
+  try { await call(cred, '/RefreshQRcode'); } catch {}
   const res = await call(cred, '/PasswordLogin', { uin, passwordMd5: md5 });
 
   // 注意顺序：QQ 要验证时也返回 code=0，只是 data 里带 needCaptcha/needNewDevice。
@@ -159,7 +161,23 @@ async function passwordLogin() {
         const st = await call(cred2, '/CheckLoginStatus');
         const d = st?.data || {};
         if (d.isLogin) { console.log('验证通过，已登录'); return true; }
-        if (d.loginError) { console.log('登录报错：' + d.loginError); break; }
+if (d.loginError) {
+          const msg = String(d.loginError);
+          console.log('登录报错：' + msg);
+          // 2026-10-30 的教训：客户端停在二维码界面时，二维码一过期就会报这个，
+          // 以前直接 break → 人点了短信链接也没人接着把登录做完。刷新后继续等。
+          if (/二维码|过期|refresh|expired/i.test(msg)) {
+            try {
+              await call(cred2, '/RefreshQRcode');
+              console.log('已刷新二维码，继续等验证结果');
+              await new Promise((r) => setTimeout(r, 3000));
+              continue;
+            } catch (e) {
+              console.log('刷新二维码失败：' + String(e.message || e).slice(0, 100));
+            }
+          }
+          break;
+        }
       }
 console.log('轮询超时（还没登进去）。验证链接可能过期了，重跑一次会生成新链接。');
       // 留个标记：巡检看到它就知道「链接过期了、人还没来」，可以早点再发一封新链接，

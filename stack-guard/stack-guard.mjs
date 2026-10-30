@@ -2,11 +2,11 @@
 /**
  * stack-guard —— 整条链的守夜人。
  *
- * 链条是：NapCat(:3000/3001) → 桥接(:3100) → DSH，另有 supervisor 管着 7 个后台脚本。
+ * 链条是：NapCat(:3000/3001) → 桥接(:3100) → DSH，另有主脑 brain.mjs 管着 9 个后台脚本。
  * 任何一环普通权限能救的，这里都救了；唯独 NapCat 要过一次 UAC，救不了，只能提示。
  *
  * 每 10 秒看一次：
- *   · supervisor 不在        → 拉起来（用 detached，脱离本进程，我死了它还活着）
+ *   · 主脑不在              → 拉起来（用 detached，脱离本进程，我死了它还活着）
  *   · :3100 断 & :3000 通    → 拉起桥接
  *   · :3000 断               → NapCat 没起，不硬拉桥接（拉了也连不上）
  *
@@ -78,16 +78,16 @@ let warnedNoNapCat = false;
 let warnedNoSupervisor = false;
 
 async function tick() {
-  // ── 1. supervisor ────────────────────────────────────────────────
-  const supPid = readPid('supervisor');
-  if (!pidRuns(supPid, 'supervisor.mjs')) {
-    if (!warnedNoSupervisor) log(`supervisor 不在（锁里是 ${supPid || '空'}），拉起来`);
+  // ── 1. 主脑（brain.mjs 管所有 worker；它在，旧 supervisor 就起不来） ──
+  const brainPid = readPid('brain');
+  if (!pidRuns(brainPid, 'brain.mjs')) {
+    if (!warnedNoSupervisor) log(`主脑不在（锁里是 ${brainPid || '空'}），拉起来`);
     try {
-      const pid = spawnDetached(path.join(ROOT, 'supervisor', 'supervisor.mjs'), ROOT, 'supervisor-run.log');
-      log(`已拉起 supervisor pid ${pid}`);
+      const pid = spawnDetached(path.join(ROOT, 'brain.mjs'), ROOT, 'brain-run.log');
+      log(`已拉起主脑 pid ${pid}`);
       warnedNoSupervisor = false;
     } catch (e) {
-      log('拉起 supervisor 失败:', e.message);
+      log('拉起主脑失败:', e.message);
       warnedNoSupervisor = true;
     }
   }
@@ -118,6 +118,6 @@ async function tick() {
   }
 }
 
-log(`守夜人启动：每 ${CHECK_SEC}s 检查 supervisor / :3000(NapCat) / :3100(桥接)`);
+log(`守夜人启动：每 ${CHECK_SEC}s 检查 主脑 / :3000(NapCat) / :3100(桥接)`);
 await tick();
 setInterval(() => void tick().catch((e) => log('检查出错:', e.message)), CHECK_SEC * 1000);

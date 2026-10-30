@@ -754,10 +754,10 @@ async function main() {
         // 这两种再重试只会让 QQ 风控更紧（今天就是这样从「能登」变成「要短信」的），
         // 所以直接停手、等人来，别每两分钟撞一次。
         if (e.status === 2 || e.status === 3) {
-          // 上次是「链接过期了人还没来」→ 45 分钟后再试、再发一封新链接；否则按 6 小时
-          const waitedOut = verifyTimedOutRecently(3 * 3600 * 1000);
+          // 2026-10-30 的教训：以前要验证就暂停 6 小时，人上班时下午掉了要等到晚上才肯再试。
+          // 现在统一 45 分钟一轮（有每日 3 次预算兜着，不会变成猛撞风控）。
           const waitH = Number(process.env.HUMAN_WAIT_H || 6);
-          const pauseH = waitedOut ? Number(process.env.RETRY_AFTER_TIMEOUT_MIN || 45) / 60 : waitH;
+          const pauseH = Number(process.env.RETRY_AFTER_TIMEOUT_MIN || 45) / 60;
           st.pausedUntil = Date.now() + pauseH * 3600 * 1000;
           // 二合一：**一封邮件里同时给**「短信验证链接」和「二维码」，哪个来得及用哪个。
           // 哥在上班，没法来回要好几次；短信链接有 30 分钟窗口，二维码只有几分钟，
@@ -769,11 +769,11 @@ async function main() {
           const parts = [];
 parts.push('（先别急着点：她可能已经自己回来了 —— 给她发条消息，或打开 http://127.0.0.1:7788 看是不是「已登录」。这条链接只对最近一次尝试有效，旧邮件里的点不开是正常的。）');
           parts.push('哥哥，我掉进小黑屋了，自己出不来。');
-          if (smsLink) parts.push(`① 点这个神奇的链接（30 分钟内有效，推荐）：\n${smsLink}\n→ 点开、收个验证码、填进去就行，我在这边等着。`);
-          if (qrUrl) parts.push(`② 或者扫这个码（几分钟就过期，赶不上就用①）：\n${qrUrl}\n→ 旁边有别的设备就扫它；没有就直接点这条。`);
+          if (smsLink) parts.push(`① 手机在外面就用这条（30 分钟内有效）：\n${smsLink}\n→ 点开、收个验证码、填进去就行，我在这边等着。`);
+          if (qrUrl) parts.push(`② 在电脑前就扫这个码（几分钟就过期，赶不上用①）：\n${qrUrl}\n→ 旁边有别的设备就扫它；没有就直接点这条。`);
 const qrLiveUp = ensureQrLive();
           parts.push(qrLiveUp
-            ? '③ 如果人在电脑前，打开这个页面直接扫（二维码会自己刷新，不会过期）：\nhttp://127.0.0.1:7788'
+            ? '③ 在电脑前扫这个页面最省事（二维码会自己刷新，不会过期）：\nhttp://127.0.0.1:7788'
             : '③ 扫码页没起来（tools/qr-live.mjs），先用上面①的链接。');
           if (qrPath) parts.push('二维码图片也在附件里（可能会过期，以页面上的为准）。');
           if (!smsLink && !qrUrl) parts.push('这次两种都没拿到，只能打开 NapCat WebUI（http://127.0.0.1:6099）手动把我放出来了。');

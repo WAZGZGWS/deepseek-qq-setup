@@ -1,4 +1,4 @@
-﻿# QQ Bot Stack
+# QQ Bot Stack
 
 > 分享给那些愿意和我一样折腾的人。
 
@@ -93,12 +93,31 @@ qq-bridge (:3100 控制台)                    ← 把 QQ 消息翻译给 AI，�
 DeepSeek Harness                           ← AI 在这里说话（也在这里烧 token）
 
 旁边还有几个"看着它们的人"：
-  supervisor     管 9 个后台脚本（记忆/余额/定时/巡检…），崩了 5 秒后重启
+  brain          主脑，一个入口管 9 个后台脚本（启动 / 守护 / 状态 / 日志都在它这儿）
   stack-doctor   每 2 分钟体检一遍：QQ / 桥接 / DSH / 后台脚本，谁挂了拉谁
-  stack-guard    更老的一层，10 秒看一眼 supervisor 和桥接（可选，一键部署不装）
+  stack-guard    更老的一层，10 秒看一眼主脑和桥接（可选，一键部署不装）
 ```
 
-一句话记住：**NapCat 管登录，桥接管翻译，DSH 管说话，supervisor 管别死。**
+一句话记住：**NapCat 管登录，桥接管翻译，DSH 管说话，主脑管别死。**
+
+### 主脑只有一条命令
+
+```bat
+E:\1\qq-stack\20-supervisor.bat        :: 开机/手动启动（窗口标题 QQ Bot Brain）
+node brain.mjs --status                 :: 谁在跑、重启几次、锁多久没心跳
+node brain.mjs --once                   :: 起一遍就退，改完代码自测用
+```
+
+为什么不是"把 9 个脚本塞进一个进程"：那 9 个都是常驻定时任务，塞一起的话
+一个未捕获异常、一次内存泄漏、一个卡死的同步调用会让**九个一起死**，连巡检都没人跑。
+所以主脑只管"启动 / 守护 / 状态"，每个脚本仍然独立进程，崩一个不连坐。
+
+踩过的坑（2026-10-30 晚上，记在这里省得再踩）：主脑和旧 supervisor 会各拉一套 worker，
+两边抢单实例锁，结果是**主脑的 9 个子进程全因锁冲突退出，锁却被 supervisor 的 worker 占着**
+—— `brain --status` 显示"全停了"，机器上却确实有 worker 在跑。现在主脑启动时会把旧
+supervisor 整棵树收掉，并占住 `supervisor.lock`（旧 supervisor 起来就退出码 3），
+两边只能活一个。`20-supervisor.bat` 看到退出码 3 也直接退出，不会每 5 秒克隆一个注定失败的进程。
+
 
 ## 别人下载下来能直接用吗
 

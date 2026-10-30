@@ -544,6 +544,54 @@ check('高峰时段省钱提醒在位', () => {
   return bad.length === 0 || bad.join('；');
 });
 
+check('主脑一个入口管所有 worker', () => {
+  // 2026-10-30：原来 supervisor 拉进程、stack-guard 守窗口、doctor 数锁，三处各管一半；
+  // 现在统一到 brain.mjs，名单还是读 supervisor/workers.mjs（只留一份）。
+  const f = path.join(ROOT, 'brain.mjs');
+  if (!fs.existsSync(f)) return '缺 brain.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/supervisor',\s*'workers\.mjs'/.test(t)) bad.push('没从 workers.mjs 读名单');
+  if (!/function start\(/.test(t)) bad.push('不会拉起 worker');
+  if (!/child\.on\('exit'/.test(t)) bad.push('worker 退出后不重启');
+  if (!/brain\.json/.test(t)) bad.push('不落状态文件');
+  if (!/--status/.test(t)) bad.push('没有 --status');
+  return bad.length === 0 || bad.join('；');
+});
+check('主脑和旧 supervisor 互斥（不会两边抢 worker）', () => {
+  // 实际撞过：主脑的 9 个子进程全因锁冲突退出，锁却被 supervisor 的 worker 占着，
+  // 状态表显示「全停了」但机器上确实有 worker 在跑 —— 最难查的一种。
+  const t = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  if (!/claimSupervisorRole\(/.test(t)) bad.push('主脑没占 supervisor 角色锁');
+  if (!/takeOverSupervisor\(/.test(t)) bad.push('启动时没接管旧 supervisor');
+  const g = fs.readFileSync(path.join(ROOT, 'stack-guard', 'stack-guard.mjs'), 'utf8');
+  if (!/readPid\('brain'\)/.test(g)) bad.push('守夜人还在盯 supervisor');
+  return bad.length === 0 || bad.join('；');
+});
+check('开机脚本跑主脑，且锁冲突时不空转', () => {
+  // 装机目录里是 install.ps1 现生成的 20-supervisor.bat；仓库里没有这个文件，
+  // 所以没装的时候退回去检查生成器（两份总得有一份是对的）。
+  const bad = [];
+  const f = path.join(ROOT, '20-supervisor.bat');
+  if (fs.existsSync(f)) {
+    const t = fs.readFileSync(f, 'utf8');
+    if (!/brain\.mjs/.test(t)) bad.push('bat 没跑 brain.mjs');
+    if (!/ERRORLEVEL/i.test(t)) bad.push('bat 退出码 3 还会死循环重启');
+    // .bat 只能 ASCII：中文注释会被 cmd 吃成乱码，甚至改变解析
+    if (/[^\x00-\x7F]/.test(t)) bad.push('bat 含非 ASCII 字符（cmd 会乱码）');
+  }
+  const inst = path.join(ROOT, 'install.ps1');
+  if (!fs.existsSync(inst)) {
+    if (!fs.existsSync(f)) bad.push('既没有 20-supervisor.bat 也没有 install.ps1');
+  } else {
+    const s = fs.readFileSync(inst, 'utf8');
+    if (!/Write-Launcher '20-supervisor\.bat'[\s\S]{0,400}?brain\.mjs/.test(s)) bad.push('install.ps1 生成的启动脚本还是旧 supervisor');
+    if (!/ERRORLEVEL/i.test(s)) bad.push('install.ps1 生成的启动脚本没有锁冲突退出');
+  }
+  return bad.length === 0 || bad.join('；');
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {

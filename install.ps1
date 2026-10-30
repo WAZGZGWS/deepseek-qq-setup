@@ -7,7 +7,7 @@
   2. 安装位置：**第一次问**，记到 %LOCALAPPDATA%\qq-bot-stack\install.json
      之后每次运行都读这条记录，所有东西继续装到同一个地方
   3. 复制脚本 → 生成启动器 → 注册计划任务 → 电源设置
-  4. 可选「依次启动」：NapCat → 等 :3000 → 桥接 → 等 :3100 → supervisor
+  4. 可选「依次启动」：NapCat → 等 :3000 → 桥接 → 等 :3100 → 主脑（brain.mjs）
 
 生成的启动器都会**先打印风险提示**，让你自己决定要不要启动。
 无人值守（计划任务/守护脚本）调用时 stdin 是空的，`set /p` 直接读到 EOF，
@@ -376,10 +376,17 @@ if not errorlevel 1 exit /b 0
 goto loop
 "@
 
-Write-Launcher '20-supervisor.bat' 'QQ Bot Supervisor' @"
-cd /d "$TargetDir\supervisor"
-"$nodeExe" supervisor.mjs
-pause
+Write-Launcher '20-supervisor.bat' 'QQ Bot Brain' @"
+cd /d "$TargetDir"
+rem brain.mjs is the single entry: it starts and watches every worker.
+rem Exit code 3 means another brain is already running - stop looping,
+rem otherwise we spawn a clone every 5 seconds that can never start.
+:loop
+"$nodeExe" brain.mjs
+if "%ERRORLEVEL%"=="3" exit /b 0
+echo.
+timeout /t 5 /nobreak >nul
+goto loop
 "@
 
 # stack-doctor.cmd 由计划任务调用，不带交互，保持 ASCII
@@ -492,11 +499,11 @@ function Wait-Port($port, $seconds) {
 function Port-Up($port) { [bool](netstat -ano | Select-String ":$port\s" | Select-String 'LISTENING') }
 
 if ($DryRun) {
-    Say '  [plan] NapCat → 等 :3000 → 桥接 → 等 :3100 → supervisor' 'DarkGray'
+    Say '  [plan] NapCat → 等 :3000 → 桥接 → 等 :3100 → 主脑（9 个后台脚本）' 'DarkGray'
 } else {
     Say ''
     Say '  依次启动的意思是：' 'Gray'
-    Say '    NapCat（QQ 协议层）→ 桥接 → supervisor（后台脚本）' 'Gray'
+    Say '    NapCat（QQ 协议层）→ 桥接 → 主脑（后台脚本）' 'Gray'
     Say '  每一步都会等端口真的通了才走下一步。' 'Gray'
     Say ''
     $go = Read-Host '  现在依次启动吗？(Y/n)'
