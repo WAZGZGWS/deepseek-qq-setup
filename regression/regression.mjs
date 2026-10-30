@@ -299,6 +299,21 @@ check('滴眼药水做完就不再提', () => {
   if (!/if \(!process\.argv\.includes\('--selftest'\)\) singleInstance/.test(s)) bad.push('selftest 会被实例锁挡住，没法在线测');
   return bad.length === 0 || bad.join('；');
 });
+check('月度/年度小结是她自己的口吻（不是模板）', () => {
+  // 2026-10-30：哥说这两种总结按她的想法来，所以指令只约束「不能怎么写」。
+  try {
+    const f = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'state', 'scheduler.json');
+    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+    const pick = (n) => (j.tasks || []).find((t) => t.name === n);
+    const m = pick('月度小结');
+    const y = pick('年度小结');
+    if (!m || !y) return '还没建（可选，建了才检查）';
+    const bad = [];
+    if (!/风格随你/.test(m.instruction) || !/风格随你/.test(y.instruction)) bad.push('没有把风格交给她');
+    // 注意：指令里本来就写着「别用『本月』这种词」，所以不能反向搜模板词，只能验「把风格交给她」
+    return bad.length === 0 || bad.join('；');
+  } catch { return '读不到 scheduler（可选检查）'; }
+});
 check('生日那天说说冷却会放宽', () => {
   // 2026-10-30：她 10:46 先发了一条，10:50 的生日任务想再发被 4 小时冷却挡死。
   const qz = path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'src', 'mcp-qzone.mjs');
