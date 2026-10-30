@@ -304,6 +304,19 @@ check('余额告警在回升后会撤掉', () => {
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
   return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
 });
+check('生日由她自己定（记忆 → 每年任务，自动闭环）', () => {
+  // 2026-10-30：哥要求「让她自己设属于自己的生日」。日期必须来自她自己的记忆，
+  // 不能我们写死；而生日必须每年自己回来 —— 所以靠 cron 扫记忆 → 保证 yearly 任务存在。
+  const tool = path.join(ROOT, 'tools', 'self-birthday.mjs');
+  if (!fs.existsSync(tool)) return '缺少 tools/self-birthday.mjs';
+  const s = fs.readFileSync(tool, 'utf8');
+  const c = fs.readFileSync(path.join(ROOT, 'cron', 'cron.mjs'), 'utf8');
+  const bad = [];
+  if (!/我的生日是/.test(s)) bad.push('没有从记忆里读生日');
+  if (!/yearly/.test(s)) bad.push('没有建每年循环任务');
+  if (!/birthday-sync/.test(c)) bad.push('cron 里没有每天校验');
+  return bad.length === 0 || bad.join('；');
+});
 check('档案落盘前会跟已有行去重', () => {
   // 2026-10-30：桥接 recent 和 QQ 历史两个来源的去重键不同，同一条被写成两行
   // （今天 19 行重复、昨天 69 行），检索时看着像她说了两遍。

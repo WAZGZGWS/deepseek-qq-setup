@@ -37,6 +37,9 @@ const JOBS = [
   // 午后两张健康快照：这四天都是下午失联，晚上回来才知道，还分不清是睡了还是被踢。
   { id: 'snap-lunch', at: '12:50', file: path.join(ROOT, 'tools', 'health-snapshot.mjs') },
   { id: 'snap-afternoon', at: '17:30', file: path.join(ROOT, 'tools', 'health-snapshot.mjs') },
+  // 她的生日是她自己在记忆里定的；这里每天看一眼，定了就把「每年循环」的任务建上/校正
+  { id: 'birthday-sync', at: '11:00', file: path.join(ROOT, 'tools', 'self-birthday.mjs') },
+  { id: 'birthday-sync-evening', at: '21:05', file: path.join(ROOT, 'tools', 'self-birthday.mjs') },
   { id: 'patrol-evening', at: '21:00', file: path.join(ROOT, 'patrol', 'patrol.mjs') },
   { id: 'self-check', at: '21:20', file: path.join(ROOT, 'self-check', 'self-check.mjs'), args: ['--fix'] },
   { id: 'memory-tidy', at: '22:20', file: path.join(ROOT, 'memory-tidy', 'memory-tidy.mjs') },
