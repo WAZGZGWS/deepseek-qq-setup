@@ -80,6 +80,7 @@ let lastMaintainAt = 0;
 let lastHandAt = 0;
 let lastStuckFixAt = 0;
 let lastMoneyNoteAt = 0;
+let lastSnapshotAt = 0;
 let lastQrAt = 0;
 let lastResources = [];
 
@@ -787,6 +788,8 @@ const ORGAN_ENTRY = {
   treasurer: 'treasurer/treasurer.mjs',
   hippocampus: 'hippocampus/hippocampus.mjs',
   ears: 'ears/ears.mjs',
+  world: 'world/world.mjs',
+  mirror: 'mirror/mirror.mjs',
   'qr-live': 'tools/qr-live.mjs',
 };
 const hemiFail = { left: 0, right: 0, cerebellum: 0 };
@@ -828,7 +831,7 @@ async function watchOrgans(mouth, now) {
   const dead = (mouth && mouth.dead) || [];
   const idle = (mouth && mouth.idle) || [];
 
-  for (const name of ['eye', 'medic', 'mouth', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears']) {
+  for (const name of ['eye', 'medic', 'mouth', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears', 'world', 'mirror']) {
     // 不能只信嘴：嘴自己死了就没人报它。所以直接看各器官的锁。
     let lockPid = 0;
     try { lockPid = Number(fs.readFileSync(path.join(STATE, `${name}.lock`), 'utf8').trim()) || 0; } catch {}
@@ -949,7 +952,7 @@ function roleMap() {
   const m = new Map();
   m.set(process.pid, 'brain');
   for (const w of workers) if (w.child && w.child.pid) m.set(w.child.pid, 'worker:' + w.name);
-  for (const o of ['eye', 'medic', 'mouth', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears']) {
+  for (const o of ['eye', 'medic', 'mouth', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears', 'world', 'mirror']) {
     const pid = (() => { try { return Number(fs.readFileSync(path.join(STATE, `${o}.lock`), 'utf8').trim()) || 0; } catch { return 0; } })();
     if (pid) m.set(pid, 'organ:' + o);
   }
@@ -1065,6 +1068,15 @@ async function runLogic(now) {
       decide('主脑-创造工具', p.name + ' → ' + p.rel, p.why || '');
     }
   } catch (e) { log('创造逻辑出错：' + e.message); }
+
+  // 存档点：一天最多一次（snapshot 自己会判，这里只是定时催）
+  try {
+    if (now - lastSnapshotAt > 6 * 3600 * 1000) {
+      lastSnapshotAt = now;
+      const c = spawn(process.execPath, [path.join(ROOT, 'tools', 'snapshot.mjs'), '--auto'], { cwd: ROOT, stdio: 'ignore', windowsHide: true, detached: true });
+      c.unref();
+    }
+  } catch {}
 
   // 喜悦：连续正常 7 天，给一次激励
   try {

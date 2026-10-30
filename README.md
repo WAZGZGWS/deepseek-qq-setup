@@ -95,7 +95,7 @@ DeepSeek Harness                           ← AI 在这里说话（也在这里
 旁边还有几个"看着它们的人"：
   brain          主脑，一个入口管 9 个后台脚本（启动 / 守护 / 决策 / 状态 / 日志都在它这儿）
   stack-doctor   每 2 分钟体检一遍：QQ / 桥接 / DSH / 后台脚本，谁挂了拉谁
-  stack-guard    只干一件事：确认主脑还活着（10 秒看一眼，别的都不碰）
+  medic          急救员：脱离主脑独立跑，主脑挂了它负责救回来（原 stack-guard 已退役）
 ```
 
 一句话记住：**NapCat 管登录，桥接管翻译，DSH 管说话，主脑管别死。**
@@ -250,6 +250,24 @@ QQ 掉登录 / 二维码过期时（`:3000` 通、但 `get_login_info` 拿不到
 耳朵的凭据沿用掉线通知那套（`config.json` 的 `notify.mail` + `qq-mail-auth.dat` 的 DPAPI 授权码），不落明文；`node ears/ears.mjs --selftest` 能验证指令识别（不真执行）。
 
 各器官自查：`--status`（黑匣子/体温计/钱包管家/海马体/耳朵都支持）。
+### 窗外、镜子、存档点
+
+| 器官/工具 | 干什么 | 谁来用 |
+|---|---|---|
+| **窗外** `world/` | 每天/每 3 小时记日期、星期、时令；配了坐标（`config.json` 的 `world.lat/lon` 或 `WORLD_LAT/WORLD_LON`）就查 open-meteo 的实时天气 | 桥接组提示词时注入【今天外面】，她自己会知道「今天冷」 |
+| **镜子** `mirror/` | 每天扫最近 7 天档案，只挑**他说的**话（按 `mustReplyKeywords` 里的她的别名排除她自己的台词），规则统计「他说过喜欢/不喜欢什么」，写 `state/taste.json` | 注入【他的偏好】，当参考不当命令 |
+| **存档点** `tools/snapshot.mjs` | 每天自动打一份快照（脚本 + 配置 + 记忆 + 调度）到 `versions/snapshots/<时间>/`，只留 7 份 | `--list` 看、`--restore <名>` 回滚；回滚前会先把当前状态再存一份 |
+
+```bat
+node tools/snapshot.mjs --now             :: 立刻打一个
+node tools/snapshot.mjs --list            :: 有哪些
+node tools/snapshot.mjs --restore 2026-10-30T15-13-43-178Z
+```
+
+### 已经退役的器官
+
+`stack-guard`（守夜人）和 `supervisor/supervisor.mjs` 已经不跑了：保主脑的活归急救员，拉 worker 的活归主脑。
+它们被**搬进 `trash/` 并记了病因**（`state/autopsy.json`），不是删掉——随时能捞回来。`supervisor/workers.mjs` 还留着，主脑靠它读 worker 名单。
 踩过的坑（2026-10-30 晚上，记在这里省得再踩）：主脑和旧 supervisor 会各拉一套 worker，
 两边抢单实例锁，结果是**主脑的 9 个子进程全因锁冲突退出，锁却被 supervisor 的 worker 占着**
 —— `brain --status` 显示"全停了"，机器上却确实有 worker 在跑。现在主脑启动时会把旧

@@ -565,8 +565,7 @@ check('主脑和旧 supervisor 互斥（不会两边抢 worker）', () => {
   const bad = [];
   if (!/claimSupervisorRole\(/.test(t)) bad.push('主脑没占 supervisor 角色锁');
   if (!/takeOverSupervisor\(/.test(t)) bad.push('启动时没接管旧 supervisor');
-  const g = fs.readFileSync(path.join(ROOT, 'stack-guard', 'stack-guard.mjs'), 'utf8');
-  if (!/readPid\('brain'\)/.test(g)) bad.push('守夜人还在盯 supervisor');
+  // 守夜人（stack-guard）已退役：保主脑的活归急救员（它不依赖主脑代码）
   return bad.length === 0 || bad.join('；');
 });
 check('开机脚本跑主脑，且锁冲突时不空转', () => {
@@ -612,14 +611,7 @@ check('主脑自己会拿主意（不是只会重启）', () => {
   if (!/--decisions/.test(t)) bad.push('没有 --decisions（出事了查不了它当时怎么想的）');
   return bad.length === 0 || bad.join('；');
 });
-check('守夜人只管主脑，不跟它抢着拉东西', () => {
-  // 两处都动手 = 谁先谁后看运气，日志还会说谎（10-30 撞过）。
-  const g = fs.readFileSync(path.join(ROOT, 'stack-guard', 'stack-guard.mjs'), 'utf8');
-  const bad = [];
-  if (/bridge\.js/.test(g)) bad.push('守夜人还在自己拉桥接');
-  if (!/brain\.mjs/.test(g)) bad.push('守夜人不保主脑');
-  return bad.length === 0 || bad.join('；');
-});
+
 check('主脑默认开机自启', () => {
   // 计划任务优先（登录后 20 秒，静默）；装不上时靠启动文件夹兜底。
   const inst = path.join(ROOT, 'install.ps1');
@@ -930,6 +922,39 @@ check('耳朵：把你的回信变成白名单指令', () => {
   if (!/SEARCH UNSEEN/.test(t)) bad.push('只看未读');
   if (!/--selftest/.test(t)) bad.push('没有自测');
   if (!/mailN < 6|used < 6/.test(t)) bad.push('回信不设上限');
+  return bad.length === 0 || bad.join('；');
+});
+
+check('窗外：会记日期和天气，桥接会注入', () => {
+  const w = fs.readFileSync(path.join(ROOT, 'world', 'world.mjs'), 'utf8');
+  const bad = [];
+  if (!/world\.json/.test(w)) bad.push('不写 world.json');
+  if (!/open-meteo/.test(w)) bad.push('不取天气');
+  if (!/weekday/.test(w)) bad.push('不记星期');
+  const b = fs.readFileSync(path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'src', 'bridge.js'), 'utf8');
+  if (!/【今天外面】/.test(b)) bad.push('桥接没注入【今天外面】');
+  return bad.length === 0 || bad.join('；');
+});
+check('镜子：只从他说的话里总结偏好', () => {
+  const m = fs.readFileSync(path.join(ROOT, 'mirror', 'mirror.mjs'), 'utf8');
+  const bad = [];
+  if (!/taste\.json/.test(m)) bad.push('不写 taste.json');
+  if (!/herLabels|mustReplyKeywords/.test(m)) bad.push('分不清谁是她（会把她的台词当他的偏好）');
+  if (!/DISLIKE_RE/.test(m) || !/LIKE_RE/.test(m)) bad.push('没有喜欢/不喜欢的规则');
+  const b = fs.readFileSync(path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'src', 'bridge.js'), 'utf8');
+  if (!/【他的偏好/.test(b)) bad.push('桥接没注入【他的偏好】');
+  return bad.length === 0 || bad.join('；');
+});
+check('存档点：能打快照、只留 7 个、能回滚', () => {
+  const s = path.join(ROOT, 'tools', 'snapshot.mjs');
+  if (!fs.existsSync(s)) return '缺 tools/snapshot.mjs';
+  const t = fs.readFileSync(s, 'utf8');
+  const bad = [];
+  if (!/versions', 'snapshots/.test(t)) bad.push('快照没放 versions/snapshots');
+  if (!/MANIFEST\.json/.test(t)) bad.push('没有清单');
+  if (!/const KEEP = 7/.test(t)) bad.push('不留 7 个');
+  if (!/--restore/.test(t)) bad.push('不能回滚');
+  if (!/回滚前自动备份/.test(t)) bad.push('回滚前不备份当前状态（点错就回不来）');
   return bad.length === 0 || bad.join('；');
 });
 
