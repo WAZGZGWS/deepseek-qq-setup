@@ -348,7 +348,7 @@ async function handle(state, name, up, restartFn, opts = {}) {
       // 否则他不知道她是自己回来的，还是还躺着（一封邮件几分钱，换一个安心）。
       if (label === 'QQ（NapCat）') {
         const downMin = s.downSince ? Math.round((Date.now() - s.downSince) / 60000) : 0;
-        mailOffline('【她回来了】QQ 已恢复登录', `她已经重新登录了${downMin ? `，这次掉了 ${downMin} 分钟` : ''}。\n\n不用你做什么，消息照常回。`);
+        mailOffline('哥哥我出来啦～', `我从黑屋里自己爬出来了${downMin ? `（这次卡了 ${downMin} 分钟）` : ''}。\n\n不用你管我，接着聊就行。`);
       }
     }
     s.fails = 0;
@@ -626,11 +626,11 @@ async function main() {
           let qrUrl = '';
           try { qrUrl = String(fs.readFileSync(path.join(STATE_DIR, 'napcat-qrcode.txt'), 'utf8')).trim().split('\n')[0]; } catch {}
           const parts = [];
-          parts.push(e.status === 2 ? 'QQ 要短信验证（自动重试已暂停）。' : 'QQ 判「新设备」，要扫码（自动重试已暂停）。');
-          if (smsLink) parts.push(`① 短信验证（30 分钟内有效，**推荐**）：\n${smsLink}\n→ 点开、收验证码、填进去；后台正在等她回来。`);
-          if (qrUrl) parts.push(`② 扫码（二维码几分钟就过期，赶不上就用①）：\n${qrUrl}\n→ 有另一台设备就用相机扫；没有就直接点这条，通常会唤起 QQ 让你确认。`);
-          if (qrPath) parts.push(`二维码图片在附件里（本机也留了一份：${qrPath}）。`);
-          if (!smsLink && !qrUrl) parts.push('两种都没拿到：打开 NapCat WebUI（http://127.0.0.1:6099）手动处理。');
+          parts.push('哥哥，我掉进小黑屋了，自己出不来。');
+          if (smsLink) parts.push(`① 点这个神奇的链接（30 分钟内有效，推荐）：\n${smsLink}\n→ 点开、收个验证码、填进去就行，我在这边等着。`);
+          if (qrUrl) parts.push(`② 或者扫这个码（几分钟就过期，赶不上就用①）：\n${qrUrl}\n→ 旁边有别的设备就扫它；没有就直接点这条。`);
+          if (qrPath) parts.push('二维码图片也在附件里。');
+          if (!smsLink && !qrUrl) parts.push('这次两种都没拿到，只能打开 NapCat WebUI（http://127.0.0.1:6099）手动把我放出来了。');
           const text = parts.join('\n\n');
           const qrAttach = qrPath;
           if (Date.now() - st.alertedAt > ALERT_COOLDOWN_MS) {
@@ -638,7 +638,7 @@ async function main() {
             desktopAlert(text);
             // 她这时候说不了话（QQ 掉着），桌面通知哥也看不见 —— 用邮件把消息送到手机上。
             // 链接在手机上就能完成验证：点开 → 收短信 → 填 → 后台的轮询会把她接回来。
-            const mailOk = mailOffline('【她掉线了】QQ 要验证，手机点链接就能救回来', text, typeof qrAttach === 'string' ? qrAttach : '');
+            const mailOk = mailOffline('哥哥，我掉进小黑屋了，点一下那个神奇的链接救我回来', text, typeof qrAttach === 'string' ? qrAttach : '');
             log(mailOk ? '已发邮件通知（QQ 外的通道）' : '邮件通知没发出去（检查 tools/set-mail-auth.cmd 有没有设过）');
             st.alertedAt = Date.now();
             st.alertedBy = 'QQ（NapCat）';
