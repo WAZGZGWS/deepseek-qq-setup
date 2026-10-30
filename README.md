@@ -874,6 +874,12 @@ node tools\qq-login.mjs password    # 用存好的密码登回去
 
 不支持。脚本用了 PowerShell、`netstat`、Windows 计划任务。移植要重写这一层。
 
+### 充上钱之后那句话，每次都不一样
+
+余额回升到最高档位时她会道个谢。以前是写死的一句，充几次就听几次；现在从文案池里挑（16 句 × 4 种结尾），并记住最近 6 次用过的，不会连着重复。
+
+不用模型现写——这一步本来零 token，为了道个谢去唤醒一次不划算。想加/改句子直接改 `balance-watch.mjs` 里的 `THANKS_BASE` / `THANKS_SUFFIX`，`node balance-watch/balance-watch.mjs --selftest` 能连抽 8 句看效果。
+
 ## 一天花多少钱
 
 按实测数据算（DeepSeek 官方价：缓存命中 0.2 / 未命中 2 / 输出 8 元每百万 token）：

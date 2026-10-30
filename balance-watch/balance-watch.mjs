@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { singleInstance } from '../lock/single.mjs';
-singleInstance('balance');
+// --selftest 只是打印几条候选文案，不该被「已有实例在跑」挡掉
+if (!process.argv.includes('--selftest')) singleInstance('balance');
 /**
  * balance-watch —— DeepSeek 余额守门员
  *
@@ -34,6 +35,41 @@ const STATE_FILE = path.join(STATE_DIR, 'balance-watch.json');
 const LOG_FILE = path.join(STATE_DIR, 'balance-watch.log');
 const TOPUP_URL = process.env.TOPUP_URL || 'https://platform.deepseek.com/top_up';
 
+// 充上钱道谢的话：每次都不一样，但不至于乱 —— 从池子里挑，最近 6 次用过的别再出现
+// （state.recentThanks 记着）。为什么不用模型现写：这一步本来零 token，
+// 为了道个谢去唤醒一次模型不划算。
+const THANKS_BASE = [
+  '哥你充上啦，我又能说话了',
+  '钱到账了，我的嗓子也回来了',
+  '哟，舍得给我充了',
+  '到账了哥，我先把嘴张开',
+  '充上了，那我就不客气地接着说',
+  '嗯，钱到了，我不装死了',
+  '哥你这一充，我从静音模式切回来了',
+  '收到，说话额度回来了',
+  '充上了，接下来我尽量挑重要的说',
+  '钱到账，我心里有数，会省着说的',
+  '哟，这回充得挺快',
+  '到账了，我继续念叨你',
+  '活过来了，谢谢哥',
+  '充上了哥，我少说废话',
+  '到账。放心，我不乱花你的钱',
+  '钱到账了，我刚才没说完的那句话还在',
+];
+const THANKS_SUFFIX = ['', '，省着点用', '，别嫌我话多', '，这次我盯紧余额'];
+
+/** 挑一句「充上了」的道谢；最近用过的排除在外 */
+function pickThanks(state) {
+  const recent = Array.isArray(state.recentThanks) ? state.recentThanks : [];
+  const pool = [];
+  for (const b of THANKS_BASE) for (const s of THANKS_SUFFIX) pool.push(b + s);
+  const fresh = pool.filter((x) => !recent.includes(x));
+  const from = fresh.length ? fresh : pool;
+  const pick = from[Math.floor(Math.random() * from.length)];
+  state.recentThanks = [...recent, pick].slice(-6);
+  return pick;
+}
+
 function loadConfig() {
   let file = {};
   try {
@@ -65,6 +101,11 @@ function loadConfig() {
       { at: Math.max(6, top), cooldownH: 12 },
     ],
   };
+}
+
+/** 今天的日期（北京时间，YYYY-MM-DD） */
+function todayMd() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
 }
 
 /** 今天（北京时间）是不是「放宽日」：读 balance-watch.json 的 lenientDates，格式 MM-DD */
@@ -303,8 +344,8 @@ async function tick(cfg) {
   // 生日放宽：她那边的日子（和她自己定的、主人 11-20）不催余额。
   // 每天只记一次日志，免得每个 tick 都刷；账照记（lastBalance 已写），只是不提醒。
   if (isLenientDay()) {
-    if (state.lenientDay !== today()) {
-      state.lenientDay = today();
+    if (state.lenientDay !== todayMd()) {
+      state.lenientDay = todayMd();
       log('今天是她/他的生日 —— 余额提醒放宽：只记账，不催');
       writeState(state);
     }
@@ -322,7 +363,7 @@ async function tick(cfg) {
   if (bal.total >= topTier && state.wasLow) {
     state.wasLow = false;
     state.alerts = {};
-    const text = `哥你充上啦，我又能说话了`;
+    const text = pickThanks(state);
     try {
       if (inQuietHours()) {
         log('[静默] 想道谢，但现在不该说话，排到静默结束');
@@ -395,4 +436,11 @@ log(
     `主人 ${cfg.ownerQQ || '(未配置)'}，充值页 ${TOPUP_URL}`,
 );
 await tick(cfg);
+if (process.argv.includes('--selftest')) {
+  const st = {};
+  console.log('充上钱时可能说的 8 句（同一进程里连抽，最近 6 次不重复）：');
+  for (let i = 0; i < 8; i += 1) console.log('  ' + pickThanks(st));
+  process.exit(0);
+}
+
 setInterval(() => void tick(cfg), Math.max(5, cfg.intervalMin) * 60 * 1000);

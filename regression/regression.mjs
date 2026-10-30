@@ -299,6 +299,17 @@ check('滴眼药水做完就不再提', () => {
   if (!/if \(!process\.argv\.includes\('--selftest'\)\) singleInstance/.test(s)) bad.push('selftest 会被实例锁挡住，没法在线测');
   return bad.length === 0 || bad.join('；');
 });
+check('充上钱的道谢每次不一样', () => {
+  // 2026-10-30：以前是一句写死的「哥你充上啦，我又能说话了」，充几次就听几次。
+  const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
+  const bad = [];
+  if (!/THANKS_BASE/.test(s)) bad.push('没有文案池');
+  if (!/recentThanks/.test(s)) bad.push('没有记住最近用过的');
+  if (!/slice\(-6\)/.test(s)) bad.push('没有「最近 6 次不重复」');
+  if (!/pickThanks\(state\)/.test(s)) bad.push('发消息处没用 pickThanks');
+  if (!/--selftest/.test(s)) bad.push('没有自测');
+  return bad.length === 0 || bad.join('；');
+});
 check('余额告警在回升后会撤掉', () => {
   // 2026-10-29：10:10 写的 ALERT-balance.txt 到晚上还在，余额已经回升也没人清
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
