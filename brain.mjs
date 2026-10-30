@@ -66,6 +66,7 @@ const CONFLICT_KEEP = 10;
 const workers = [];
 const decisions = [];
 const conflicts = [];
+const blockedRightKind = new Map();
 const hemis = {
   left: { status: 'online', errors: 0, notes: [], metrics: {}, at: 0 },
   right: { status: 'online', violations: [], offlineUntil: 0, notes: [], at: 0 },
@@ -466,7 +467,11 @@ function noteConflict(side, kind, why) {
   h.violations = h.violations.filter((t) => now - t < VIOLATION_WINDOW_MS);
   h.violations.push(now);
   decide(`冲突-${side === 'right' ? '右脑' : '小脑'}动作下线`, kind, why);
-  if (h.violations.length >= VIOLATION_LIMIT && h.offlineUntil < now) {
+  if (side === 'right') {
+    // 只冷却这个动作，别让整个右脑停摆（2026-10-30：夜里拒了一次拉 NapCat，右脑歇了半小时）
+    blockedRightKind.set(kind, now + RIGHT_OFFLINE_MS);
+    decide('右脑-动作冷却', kind, '这个动作 15 分钟内不再提，其他提案照常');
+  } else if (h.violations.length >= VIOLATION_LIMIT && h.offlineUntil < now) {
     h.offlineUntil = now + RIGHT_OFFLINE_MS;
     h.status = 'offline';
     decide(`${side === 'right' ? '右脑' : '小脑'}-自己下线`, `${RIGHT_OFFLINE_MS / 60000} 分钟内不再提这类东西`, `${VIOLATION_LIMIT} 次冲突：${kind}`);
@@ -1009,6 +1014,7 @@ async function reviewCycle() {
 
   for (const p of rp.proposals) {
     if (hemis.right.status === 'offline' && !p.essential) continue;
+    if ((blockedRightKind.get(p.kind) || 0) > now) continue;
     let verdict = gate(p, lv);
     if (!verdict.allow) {
       const ov = tryOverride(p, now);
