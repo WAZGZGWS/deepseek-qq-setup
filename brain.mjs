@@ -41,6 +41,8 @@ const BRAIN_LOG = path.join(STATE, 'brain.log');
 const DEC_LOG = path.join(STATE, 'brain-decisions.jsonl');
 const SUP_LOCK = path.join(STATE, 'supervisor.lock');
 const RIGHT_STATE = path.join(STATE, 'right-brain.json');
+const MOUTH_REPORT = path.join(STATE, 'mouth-report.json');
+const HEAL_QUEUE = path.join(STATE, 'heal-queue.json');
 const STATUS_ONLY = process.argv.includes('--status');
 const HEMIS_ONLY = process.argv.includes('--hemis');
 const DECISIONS_ONLY = process.argv.includes('--decisions');
@@ -200,6 +202,7 @@ function printStatus() {
   if (!d) { console.log('还没有 brain.json（主脑还没跑过）'); return; }
   console.log(`主脑 pid=${d.pid}  更新于 ${new Date(d.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
   console.log(`  NapCat:${d.napcat ? '通' : '断'}  桥接:${d.bridge ? '通' : '断'}`);
+  if (d.mouth && d.mouth.summary) console.log('  嘴报：' + d.mouth.summary);
   const h = d.hemis || {};
   if (h.left) console.log(`  左脑(安全):${h.left.status}${h.left.notes && h.left.notes.length ? '  ' + h.left.notes.join(' / ') : ''}`);
   if (h.cerebellum) console.log(`  小脑(记忆/余额):${h.cerebellum.status}${h.cerebellum.offlineSec ? `  （自己下线 ${Math.ceil(h.cerebellum.offlineSec / 60)} 分钟）` : ''}${h.cerebellum.metrics && h.cerebellum.metrics.balance ? `  余额 ${h.cerebellum.metrics.balance}` : ''}`);
@@ -655,6 +658,62 @@ async function maintain(now, lv) {
   }
 }
 
+/**
+ * 嘴的通报：主脑据此知道「谁死了、谁摸鱼、能不能干活」。
+ * 嘴自己不动手，所以这里只记一笔；真处置还是走右脑/调解。
+ */
+let lastMouthSig = '';
+function readMouth(now) {
+  const r = (() => { try { return JSON.parse(fs.readFileSync(MOUTH_REPORT, 'utf8')); } catch { return null; } })();
+  if (!r) return null;
+  const sig = `${(r.dead || []).join(',')}|${(r.idle || []).join(',')}`;
+  if (sig !== lastMouthSig) {
+    lastMouthSig = sig;
+    if ((r.dead || []).length) decide('嘴报-有东西死了', (r.dead || []).join('/'), r.summary || '');
+    else if ((r.idle || []).length) decide('嘴报-有人在摸鱼', (r.idle || []).join('/'), r.summary || '');
+    else decide('嘴报', '全部正常', r.summary || '');
+  }
+  return r;
+}
+
+/**
+ * 急救队列：急救员救不了 / 救到一半时把「还要谁来做」写在这里。
+ * 主脑一起来就消费它 —— 这就是「被救活的脑和闲着的手要辅助复活其他脑」。
+ */
+function consumeHealQueue(now) {
+  let q = null;
+  try { q = JSON.parse(fs.readFileSync(HEAL_QUEUE, 'utf8')); } catch { return; }
+  if (!q || !Array.isArray(q.items) || !q.items.length) return;
+  let changed = false;
+  for (const it of q.items) {
+    if (it.status !== 'pending') continue;
+    const ageMin = Math.round((now - (Date.parse(it.at) || now)) / 60000);
+    if (it.kind === 'revive-hemi') {
+      const h = hemis[it.hemi];
+      if (!h) { it.status = 'skip'; changed = true; continue; }
+      if (h.offlineUntil && now < h.offlineUntil) continue; // 别抢它自己的冷却
+      h.status = 'online';
+      h.offlineUntil = 0;
+      h.violations = [];
+      it.status = 'done';
+      it.doneAt = new Date(now).toISOString();
+      changed = true;
+      decide('主脑-复活脑', it.hemi, `急救队列（等了 ${ageMin} 分钟）`);
+    } else if (it.kind === 'rescue-brain') {
+      it.status = 'done';
+      it.doneAt = new Date(now).toISOString();
+      changed = true;
+      decide('主脑-接回权能', '救援任务闭环', `急救队列里的 rescue-brain（${ageMin} 分钟前）`);
+    } else if (ageMin > 15) {
+      it.status = 'stale';
+      changed = true;
+    }
+  }
+  if (changed) {
+    try { q.at = new Date(now).toISOString(); fs.writeFileSync(HEAL_QUEUE, JSON.stringify(q, null, 2)); } catch {}
+  }
+}
+
 async function reviewCycle() {
   const now = Date.now();
   let ports = { napcat: false, bridge: false };
@@ -756,9 +815,11 @@ async function reviewCycle() {
   }
 
   lastStack = { napcat: ports.napcat, bridge: ports.bridge };
+  consumeHealQueue(now);
+  const mouth = readMouth(now);
   await maintain(now, lv);
   await maybeAlertHemis(now);
-  writeStatus(ports);
+  writeStatus({ napcat: ports.napcat, bridge: ports.bridge, mouth });
 }
 
 /** 两个脑都下线 = 只剩保命：写告警，但不发邮件（邮件是掉线专用通道，别滥用） */

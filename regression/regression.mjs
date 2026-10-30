@@ -739,6 +739,37 @@ check('主脑有最高决策权：越权和维持', () => {
   return bad.length === 0 || bad.join('；');
 });
 
+check('嘴默认闭着，只把「谁死了/谁摸鱼」报给主脑', () => {
+  const f = path.join(ROOT, 'mouth', 'mouth.mjs');
+  if (!fs.existsSync(f)) return '缺 mouth/mouth.mjs';
+  const t = fs.readFileSync(f, 'utf8');
+  const bad = [];
+  if (!/mouth-report\.json/.test(t)) bad.push('不写报告给主脑');
+  if (!/dead/.test(t) || !/idle/.test(t)) bad.push('不分「死」和「摸鱼」');
+  if (!/canWork/.test(t)) bad.push('不说能不能干活');
+  if (/killTree|spawn\(process\.execPath/.test(t)) bad.push('嘴自己动手了（它只该看和报）');
+  if (!/CHECK_MS/.test(t)) bad.push('不定时看');
+  return bad.length === 0 || bad.join('；');
+});
+check('急救队列：主脑起来后接着救其余的脑', () => {
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const m = fs.readFileSync(path.join(ROOT, 'medic', 'medic.mjs'), 'utf8');
+  const bad = [];
+  if (!/heal-queue\.json/.test(b) || !/consumeHealQueue/.test(b)) bad.push('主脑不消费急救队列');
+  if (!/revive-hemi/.test(b)) bad.push('主脑不会复活其他脑');
+  if (!/function queueHeal/.test(m)) bad.push('急救员不会写队列');
+  if (!/checkHemis/.test(m)) bad.push('急救员不检查哪个脑下线太久');
+  if (!/commandHands/.test(m)) bad.push('急救员接管时不指挥左手');
+  return bad.length === 0 || bad.join('；');
+});
+check('急救员清场不误伤「本体」的锁', () => {
+  // 实际踩过：清场时把 bridge.lock 当 worker 锁，杀了桥接，主脑又得重拉
+  const m = fs.readFileSync(path.join(ROOT, 'medic', 'medic.mjs'), 'utf8');
+  if (!/workerNames\(\)/.test(m)) return '清场没有限定在 worker 锁上';
+  if (/f\.endsWith\('\.lock'\) && !\['medic\.lock', 'eye\.lock'\]/.test(m)) return '还在按后缀清所有锁';
+  return true;
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {

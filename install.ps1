@@ -474,6 +474,41 @@ if ($DryRun) {
     }
 }
 
+Head '⑦.7 眼和嘴（观察 + 通报，都不动手）'
+if ($DryRun) {
+    Say '  [plan] 生成 eye-start.cmd / mouth-start.cmd + 注册 QQBotEye / QQBotMouth' 'DarkGray'
+} else {
+    $eyeBat = @"
+@echo off
+rem Eye: silent observer. Reports findings to state/eye-findings.json for the healer.
+cd /d "$TargetDir"
+"$nodeExe" "$TargetDir\eye\eye.mjs"
+"@
+    $mouthBat = @"
+@echo off
+rem Mouth: silent reporter. Tells the brain who is dead, idle, or able to work.
+cd /d "$TargetDir"
+"$nodeExe" "$TargetDir\mouth\mouth.mjs"
+"@
+    try { [IO.File]::WriteAllText((Join-Path $TargetDir 'eye-start.cmd'), $eyeBat, (New-Object System.Text.ASCIIEncoding)) } catch {}
+    try { [IO.File]::WriteAllText((Join-Path $TargetDir 'mouth-start.cmd'), $mouthBat, (New-Object System.Text.ASCIIEncoding)) } catch {}
+    foreach ($pair in @(@{n='QQBotEye'; f='eye-start.cmd'; d='PT35S'}, @{n='QQBotMouth'; f='mouth-start.cmd'; d='PT45S'})) {
+        Unregister-ScheduledTask -TaskName $pair.n -Confirm:$false -ErrorAction SilentlyContinue
+        try {
+            if (Test-Path (Join-Path $TargetDir 'run-hidden.vbs')) {
+                $a = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$TargetDir\run-hidden.vbs`" `"$TargetDir\$($pair.f)`"" -WorkingDirectory $TargetDir
+            } else {
+                $a = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$TargetDir\$($pair.f)`"" -WorkingDirectory $TargetDir
+            }
+            $tg = New-ScheduledTaskTrigger -AtLogOn
+            $tg.Delay = $pair.d
+            $st = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+            $who2 = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Limited
+            Register-ScheduledTask -TaskName $pair.n -Action $a -Trigger $tg -Settings $st -Principal $who2 -Force | Out-Null
+            Say "  [OK] 已注册 $($pair.n)" 'Green'
+        } catch { Say "  [--] $($pair.n) 没注册上：$($_.Exception.Message)" 'Yellow' }
+    }
+}
 Head '⑦.6 急救员（脱离主脑，负责救主脑）'
 if ($DryRun) {
     Say '  [plan] 生成 medic-start.cmd + 注册 QQBotMedic（登录后 25 秒）' 'DarkGray'
