@@ -332,7 +332,9 @@ check('充上钱的道谢每次不一样', () => {
 check('余额告警在回升后会撤掉', () => {
   // 2026-10-29：10:10 写的 ALERT-balance.txt 到晚上还在，余额已经回升也没人清
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
-  return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
+  const back = /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s);
+  const lenient = /放宽日：撤掉旧的余额告警文件/.test(s);
+  return (back && lenient) || '余额回升/放宽日时没有撤掉 ALERT-balance.txt';
 });
 check('掉线能用邮件找到哥（不依赖 QQ 的通道）', () => {
   // 2026-10-30：她掉线时在 QQ 上一个字都发不出去，验证链接只能躺在电脑里，哥在上班就废了。

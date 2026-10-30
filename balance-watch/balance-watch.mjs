@@ -344,6 +344,11 @@ async function tick(cfg) {
   // 生日放宽：她那边的日子（和她自己定的、主人 11-20）不催余额。
   // 每天只记一次日志，免得每个 tick 都刷；账照记（lastBalance 已写），只是不提醒。
   if (isLenientDay()) {
+    // 放宽日连旧的告警文件也一起撤掉：不看档位、就不该留一张「低于 X 元」的纸条在那儿
+    try {
+      const af = path.join(STATE_DIR, 'ALERT-balance.txt');
+      if (fs.existsSync(af)) { fs.unlinkSync(af); log('放宽日：撤掉旧的余额告警文件'); }
+    } catch {}
     if (state.lenientDay !== todayMd()) {
       state.lenientDay = todayMd();
       log('今天是她/他的生日 —— 余额提醒放宽：只记账，不催');
