@@ -310,6 +310,8 @@ check('月度/年度小结是她自己的口吻（不是模板）', () => {
     if (!m || !y) return '还没建（可选，建了才检查）';
     const bad = [];
     if (!/风格随你/.test(m.instruction) || !/风格随你/.test(y.instruction)) bad.push('没有把风格交给她');
+    if (!/qzone_publish/.test(m.instruction) || !/qzone_publish/.test(y.instruction)) bad.push('小结没有发到空间');
+    if (!/不要在聊天里发/.test(m.instruction) || !/不要在聊天里发/.test(y.instruction)) bad.push('小结会刷聊天');
     // 注意：指令里本来就写着「别用『本月』这种词」，所以不能反向搜模板词，只能验「把风格交给她」
     return bad.length === 0 || bad.join('；');
   } catch { return '读不到 scheduler（可选检查）'; }
