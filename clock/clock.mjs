@@ -52,7 +52,7 @@ const PHASES = [
     patch: { proactive: { enabled: false } },
   },
   {
-    id: 'evening', from: 18, to: 23, label: '晚上', quiet: false,
+    id: 'evening', from: 20, to: 23, label: '晚上', quiet: false,
     patch: {
       proactive: { enabled: true, probability: 0.3, checkIntervalMinMs: 2700000, checkIntervalMaxMs: 5400000, idleThresholdMs: 1500000 },
       send: { burstMaxMessages: 6, maxMessageChars: 500 },
@@ -89,6 +89,17 @@ async function tick() {
   const st = readJson(OUT) || {};
   const now = Date.now();
   if (st.phase !== phase.id) {
+    // 省钱优先：小脑/钱包已经关掉主动发言时，生物钟只记时段，别把它又打开
+    let saveMode = false;
+    try {
+      const pol = JSON.parse(fs.readFileSync(path.join(ROOT, 'state', 'cerebellum-policy.json'), 'utf8'));
+      saveMode = pol && pol.proactive === 'off';
+    } catch {}
+    if (saveMode) {
+      fs.writeFileSync(OUT, JSON.stringify({ at: new Date(now).toISOString(), phase: phase.id, label: phase.label, quiet: phase.quiet, applied: false, skipped: '省钱模式', since: new Date(now).toISOString() }, null, 2));
+      log(`进入「${phase.label}」，但省钱模式开着，不改桥接`);
+      return phase;
+    }
     const ok = await apply(phase);
     fs.writeFileSync(OUT, JSON.stringify({ at: new Date(now).toISOString(), phase: phase.id, label: phase.label, quiet: phase.quiet, applied: ok, since: new Date(now).toISOString() }, null, 2));
     if (ok) log(`进入「${phase.label}」（${phase.quiet ? '安静' : '可以冒头'}）`);
@@ -103,7 +114,7 @@ function printStatus() {
   const st = readJson(OUT) || {};
   const p = phaseAt();
   console.log(`生物钟：现在「${p.label}」${p.quiet ? '（安静）' : ''}，上次切换 ${st.since ? new Date(st.since).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '还没切过'}`);
-  console.log(`  四段：夜间 23–7 关主动 / 早上 7–9 轻主动 / 上班 9–18 关主动 / 晚上 18–23 正常`);
+  console.log(`  四段：夜间 23–7 关主动 / 早上 7–9 轻主动 / 上班 9–18 关主动 / 晚上 20–23 正常`);
 }
 
 async function main() {
