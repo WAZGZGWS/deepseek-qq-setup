@@ -268,6 +268,21 @@ node tools/snapshot.mjs --restore 2026-10-30T15-13-43-178Z
 
 `stack-guard`（守夜人）和 `supervisor/supervisor.mjs` 已经不跑了：保主脑的活归急救员，拉 worker 的活归主脑。
 它们被**搬进 `trash/` 并记了病因**（`state/autopsy.json`），不是删掉——随时能捞回来。`supervisor/workers.mjs` 还留着，主脑靠它读 worker 名单。
+### 又瘦了一圈：删掉的、合并的、新加的
+
+- **「嘴」并进「眼」**：眼每轮顺手写 `state/eye-report.json`（谁死了/谁摸鱼/能不能干活），少一个进程、少一套锁。
+- **删掉「镜子」**：规则统计噪声太大，对保护她没用；`state/taste.json` 和桥接里的【他的偏好】一起去掉。
+- **删掉「喜悦」和「创造」逻辑**：一个只是仪式，一个几乎不触发；`logic/organs.mjs` 现在只留「理性」（退役 + 尸检）。
+- **新器官默认只读**：`lib/organ-policy.mjs` 定规矩——删记忆、发邮件、改桥接配置这类动手的事，必须先被登记成 active。
+
+```bat
+node tools/organ-mode.mjs                 :: 看每个器官是 active 还是 readonly
+node tools/organ-mode.mjs ears active     :: 授权耳朵执行邮件指令
+node tools/organ-mode.mjs ears readonly   :: 收回
+```
+
+- **生物钟** `clock/`：按北京时间切四段，只在换段时改一次桥接的主动发言参数——夜里 23–7 关、早上 7–9 轻主动、上班 9–18 关、晚上 18–23 正常。
+- **`brain.mjs` 拆了**：进程/文件/桥接这些纯工具挪到 `lib/brain-util.mjs`，主脑只剩仲裁和调度。
 踩过的坑（2026-10-30 晚上，记在这里省得再踩）：主脑和旧 supervisor 会各拉一套 worker，
 两边抢单实例锁，结果是**主脑的 9 个子进程全因锁冲突退出，锁却被 supervisor 的 worker 占着**
 —— `brain --status` 显示"全停了"，机器上却确实有 worker 在跑。现在主脑启动时会把旧

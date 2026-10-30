@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, STATE, stamp } from '../lib/base.mjs';
+import { isActive } from '../lib/organ-policy.mjs';
 
 const NAME = 'treasurer';
 const LOCK = path.join(STATE, `${NAME}.lock`);
@@ -87,7 +88,8 @@ async function main() {
       fs.writeFileSync(FILE, JSON.stringify(st, null, 2));
 
       if (c.etaHours != null && c.etaHours < ETA_WARN_H) {
-        saveMode(true, `预计 ${c.etaHours.toFixed(1)} 小时后没钱`);
+        const active = isActive(STATE, 'treasurer');
+        if (active) saveMode(true, `预计 ${c.etaHours.toFixed(1)} 小时后没钱`);
         const a = readJson(ALERT) || {};
         if (!a.warned) {
           fs.writeFileSync(ALERT, JSON.stringify({ warned: true, at: new Date(now).toISOString(), balance: c.balance, burnPerHour: c.burnPerHour, etaHours: c.etaHours, why: `预计 ${c.etaHours.toFixed(1)} 小时后烧完（${c.burnPerHour.toFixed(2)} 元/小时）` }, null, 2));

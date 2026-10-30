@@ -21,6 +21,7 @@ import path from 'node:path';
 import tls from 'node:tls';
 import { spawn, execFileSync } from 'node:child_process';
 import { ROOT, STATE, stamp } from '../lib/base.mjs';
+import { isActive } from '../lib/organ-policy.mjs';
 
 const NAME = 'ears';
 const LOCK = path.join(STATE, `${NAME}.lock`);
@@ -210,13 +211,15 @@ async function checkOnce() {
         await imap.cmd(`UID STORE ${uid} +FLAGS (\\Seen)`);
         continue;
       }
-      const res = runCommand(subject);
+      // 默认只读：没被主脑登记成 active 时只记账，不执行
+      const active = isActive(STATE, 'ears');
+      const res = active ? runCommand(subject) : { ok: false, act: '待批', reply: '' };
       st.seen.push({ uid, at: new Date().toISOString(), subject, act: res.act || '未识别' });
       st.at = new Date().toISOString();
       fs.writeFileSync(FILE, JSON.stringify(st, null, 2));
       log(`收到指令「${subject}」→ ${res.act || '未识别'}`);
 
-      if (res.act && res.reply) {
+      if (active && res.act && res.reply) {
         const used = mailCountToday(st);
         if (used < 6) {
           sendMail('耳朵回信：' + res.act, res.reply);

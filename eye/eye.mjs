@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { ROOT, STATE, stamp, portOpen } from '../lib/base.mjs';
+import * as reporter from '../lib/reporter.mjs';
 
 const EYE_LOCK = path.join(STATE, 'eye.lock');
 const EYE_STATE = path.join(STATE, 'eye.json');
@@ -168,7 +169,8 @@ async function main() {
   const tick = async () => {
     try {
       const r = await observe();
-      const sig = r.findings.map((f) => f.code + (f.worker || f.hemi || '')).sort().join('|');
+      const rep = reporter.report(STATE, Date.now());
+      const sig = r.findings.map((f) => f.code + (f.worker || f.hemi || '')).sort().join('|') + '||' + rep.summary;
       const state = {
         at: new Date().toISOString(),
         pid: process.pid,

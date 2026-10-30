@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { ROOT, BRIDGE, STATE, stamp, portOpen } from './lib/base.mjs';
 import { singleInstance } from './lock/single.mjs';
 import { WORKER_NAMES } from './supervisor/workers.mjs';
+import { pidAlive, isNodePid, killTree, readPidFile, lockAge, tail, registry, spawnBridge, spawnNapcat, runDoctor, runScript, sendMail, writeSaveMode, trimLogs, killExtraQQ } from './lib/brain-util.mjs';
 // 三个脑用动态 import：某个脑「救不活」时，主脑可以重建一个新的
 // （换个 ?gen= 参数就是全新的模块实例，状态清零、函数重新加载）。
 let hemiGen = { left: 0, right: 0, cerebellum: 0 };
@@ -45,7 +46,7 @@ const BRAIN_LOG = path.join(STATE, 'brain.log');
 const DEC_LOG = path.join(STATE, 'brain-decisions.jsonl');
 const SUP_LOCK = path.join(STATE, 'supervisor.lock');
 const RIGHT_STATE = path.join(STATE, 'right-brain.json');
-const MOUTH_REPORT = path.join(STATE, 'mouth-report.json');
+const MOUTH_REPORT = path.join(STATE, 'eye-report.json'); // 原「嘴」已并入眼
 const HEAL_QUEUE = path.join(STATE, 'heal-queue.json');
 const STATUS_ONLY = process.argv.includes('--status');
 const HEMIS_ONLY = process.argv.includes('--hemis');
@@ -101,48 +102,19 @@ function decide(rule, action, detail = '') {
 
 // ── 基础工具 ────────────────────────────────────────────────────────
 
-function registry() {
-  const file = path.join(ROOT, 'supervisor', 'workers.mjs');
-  const text = fs.readFileSync(file, 'utf8');
-  const out = [];
-  for (const m of text.matchAll(/name:\s*'([^']+)'[\s\S]{0,200}?file:\s*path\.join\(ROOT,\s*'([^']+)',\s*'([^']+)'\)/g)) {
-    out.push({ name: m[1], file: path.join(ROOT, m[2], m[3]) });
-  }
-  return out;
-}
 
-function lockAge(name) {
-  try { return Math.round((Date.now() - fs.statSync(path.join(STATE, `${name}.lock`)).mtimeMs) / 1000); } catch { return -1; }
-}
 
-function pidAlive(pid) {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
 
-function isNodePid(pid) {
-  try {
-    const out = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
-      encoding: 'utf8', windowsHide: true, timeout: 5000,
-    });
-    return /node\.exe/i.test(out);
-  } catch { return false; }
-}
 
-function killTree(pid, image = 'node.exe') {
-  try {
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 10000 });
-    return true;
-  } catch { return false; }
-}
 
-function readPidFile(f) {
-  try { return Number(fs.readFileSync(f, 'utf8').trim()) || 0; } catch { return 0; }
-}
 
-function tail(file, lines = 40) {
-  try { return fs.readFileSync(file, 'utf8').split('\n').slice(-lines).join('\n'); } catch { return ''; }
-}
+
+
+
+
+
+
+
 
 function snapshotWorkers(now) {
   return workers.map((w) => ({
@@ -389,72 +361,16 @@ function killOrphan(name) {
 
 // ── 执行器（所有副作用都在主脑这一层） ─────────────────────────────
 
-function spawnBridge() {
-  try {
-    const out = fs.openSync(path.join(STATE, 'bridge-run.log'), 'a');
-    const child = spawn(process.execPath, [path.join(BRIDGE, 'src', 'bridge.js')], {
-      cwd: BRIDGE, stdio: ['ignore', out, out], windowsHide: true, detached: true,
-    });
-    child.unref();
-    try { fs.closeSync(out); } catch {}
-    return { ok: true, pid: child.pid };
-  } catch (e) { return { ok: false, err: e.message }; }
-}
 
-function spawnNapcat() {
-  try {
-    const child = spawn(process.execPath, [path.join(ROOT, 'tools', 'napcat-start.mjs'), '--as-user'], {
-      cwd: ROOT, stdio: 'ignore', windowsHide: true, detached: true,
-    });
-    child.unref();
-    return { ok: true, pid: child.pid };
-  } catch (e) { return { ok: false, err: e.message }; }
-}
 
-function runDoctor() {
-  try { execFileSync('schtasks', ['/run', '/tn', 'QQStackDoctor'], { stdio: 'ignore', windowsHide: true, timeout: 15000 }); return { ok: true }; } catch (e) { return { ok: false, err: e.message }; }
-}
+
+
+
 
 /** 只留一个 QQ：保住 :3000 的那个进程，其余按进程树杀 */
-function killExtraQQ() {
-  let keep = 0;
-  try {
-    const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
-    for (const line of out.split('\n')) {
-      if (!/:3000\b/.test(line) || !/LISTEN/i.test(line)) continue;
-      const cols = line.trim().split(/\s+/);
-      keep = Number(cols[cols.length - 1]) || keep;
-    }
-  } catch {}
-  let pids = [];
-  try {
-    const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq QQ.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
-    pids = [...out.matchAll(/"QQ\.exe","(\d+)"/gi)].map((m) => Number(m[1]));
-  } catch {}
-  const extras = pids.filter((p) => p !== keep);
-  let killed = 0;
-  for (const p of extras) { if (killTree(p)) killed += 1; }
-  return { ok: killed > 0, keep, killed, extras };
-}
 
-function trimLogs() {
-  let trimmed = 0;
-  for (const dir of [STATE, path.join(ROOT, 'stack-guard'), path.join(ROOT, 'stack-doctor')]) {
-    let files = [];
-    try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.log')); } catch { continue; }
-    for (const f of files) {
-      const p = path.join(dir, f);
-      try {
-        const st = fs.statSync(p);
-        if (st.size < LOG_MAX_BYTES) continue;
-        fs.writeFileSync(p, fs.readFileSync(p, 'utf8').split('\n').slice(-1500).join('\n'));
-        trimmed += 1;
-        decide('日志-太大', '裁剪 ' + f, `${Math.round(st.size / 1048576)}MB → 1500 行`);
-      } catch {}
-    }
-  }
-  return { ok: true, trimmed };
-}
+
+
 
 async function execute(p) {
   switch (p.kind) {
@@ -580,39 +496,13 @@ function gate(p, lv) {
 }
 
 /** 跑一个后台脚本（memory-tidy / memory-summary 这类一次性任务） */
-function runScript(rel, args = []) {
-  try {
-    const file = path.join(ROOT, rel);
-    const child = spawn(process.execPath, [file, ...args], {
-      cwd: path.dirname(file), stdio: 'ignore', windowsHide: true, detached: true,
-    });
-    child.unref();
-    return { ok: true, pid: child.pid };
-  } catch (e) { return { ok: false, err: e.message }; }
-}
+
 
 /** 余额提醒邮件：走掉线通知同一个通道（smtp 认证码是 DPAPI 加密的，不用重复配） */
-function sendMail(subject, body) {
-  try {
-    const file = path.join(ROOT, 'tools', 'notify-offline.mjs');
-    if (!fs.existsSync(file)) return { ok: false, err: '没有 notify-offline.mjs' };
-    const child = spawn(process.execPath, [file, `--subject=${subject}`, `--body=${body}`], {
-      cwd: ROOT, stdio: 'ignore', windowsHide: true, detached: true,
-    });
-    child.unref();
-    return { ok: true, pid: child.pid };
-  } catch (e) { return { ok: false, err: e.message }; }
-}
+
 
 /** 小脑说的「省着聊」：落成一份策略文件，balance-watch 会读它压掉主动发言 */
-function writeSaveMode(on, why = '') {
-  try {
-    const p = path.join(ROOT, 'state', 'cerebellum-policy.json');
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify({ proactive: on ? 'off' : 'normal', why, at: new Date().toISOString() }, null, 2));
-    return { ok: true };
-  } catch (e) { return { ok: false, err: e.message }; }
-}
+
 
 /**
  * 主脑的越权：所有脑都说不行，但它判断「再不动手服务就没了」时才用。
@@ -782,14 +672,13 @@ function closeQrScreen(now) {
 const ORGAN_ENTRY = {
   eye: 'eye/eye.mjs',
   medic: 'medic/medic.mjs',
-  mouth: 'mouth/mouth.mjs',
   blackbox: 'blackbox/blackbox.mjs',
   vitals: 'vitals/vitals.mjs',
   treasurer: 'treasurer/treasurer.mjs',
   hippocampus: 'hippocampus/hippocampus.mjs',
   ears: 'ears/ears.mjs',
   world: 'world/world.mjs',
-  mirror: 'mirror/mirror.mjs',
+  clock: 'clock/clock.mjs',
   'qr-live': 'tools/qr-live.mjs',
 };
 const hemiFail = { left: 0, right: 0, cerebellum: 0 };
@@ -831,7 +720,7 @@ async function watchOrgans(mouth, now) {
   const dead = (mouth && mouth.dead) || [];
   const idle = (mouth && mouth.idle) || [];
 
-  for (const name of ['eye', 'medic', 'mouth', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears', 'world', 'mirror']) {
+  for (const name of ['eye', 'medic', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears', 'world', 'clock']) {
     // 不能只信嘴：嘴自己死了就没人报它。所以直接看各器官的锁。
     let lockPid = 0;
     try { lockPid = Number(fs.readFileSync(path.join(STATE, `${name}.lock`), 'utf8').trim()) || 0; } catch {}
@@ -952,7 +841,7 @@ function roleMap() {
   const m = new Map();
   m.set(process.pid, 'brain');
   for (const w of workers) if (w.child && w.child.pid) m.set(w.child.pid, 'worker:' + w.name);
-  for (const o of ['eye', 'medic', 'mouth', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears', 'world', 'mirror']) {
+  for (const o of ['eye', 'medic', 'blackbox', 'vitals', 'treasurer', 'hippocampus', 'ears', 'world', 'clock']) {
     const pid = (() => { try { return Number(fs.readFileSync(path.join(STATE, `${o}.lock`), 'utf8').trim()) || 0; } catch { return 0; } })();
     if (pid) m.set(pid, 'organ:' + o);
   }
@@ -989,8 +878,8 @@ async function watchResources(now) {
 
   for (const k of keep) {
     const role = k.role;
-    const rewarded = rewardedUntil.has(role) && now < rewardedUntil.get(role);
-    const hot = !rewarded && (k.rssMb > RSS_WARN_MB || k.cpuPct > CPU_WARN_PCT);
+
+    const hot = k.rssMb > RSS_WARN_MB || k.cpuPct > CPU_WARN_PCT;
     const streak = hot ? (cpuStreak.get(role) || 0) + 1 : 0;
     cpuStreak.set(role, streak);
 
@@ -1037,7 +926,7 @@ async function watchResources(now) {
 
 // ── 主脑三条逻辑：理性（尸检清理）/ 创造（造工具）/ 喜悦（激励） ──────
 
-const rewardedUntil = new Map();
+
 let lastLogicAt = 0;
 
 async function runLogic(now) {
@@ -1056,19 +945,6 @@ async function runLogic(now) {
     }
   } catch (e) { log('理性逻辑出错：' + e.message); }
 
-  // 创造：反复出现的需求才造工具，只新增不覆盖
-  try {
-    const cp = organLogic.creationPlan({ root: ROOT, stateDir: STATE, decisions });
-    for (const p of cp.proposals || []) {
-      const abs = path.join(ROOT, p.rel || '');
-      if (fs.existsSync(abs)) continue; // 不覆盖
-      fs.mkdirSync(path.dirname(abs), { recursive: true });
-      fs.writeFileSync(abs, p.code || '');
-      organLogic.recordCreated(STATE, p.name, p.rel, p.why);
-      decide('主脑-创造工具', p.name + ' → ' + p.rel, p.why || '');
-    }
-  } catch (e) { log('创造逻辑出错：' + e.message); }
-
   // 存档点：一天最多一次（snapshot 自己会判，这里只是定时催）
   try {
     if (now - lastSnapshotAt > 6 * 3600 * 1000) {
@@ -1078,24 +954,7 @@ async function runLogic(now) {
     }
   } catch {}
 
-  // 喜悦：连续正常 7 天，给一次激励
-  try {
-    const healthy = [];
-    for (const o of ['eye', 'medic', 'mouth']) {
-      let pid = 0;
-      try { pid = Number(fs.readFileSync(path.join(STATE, `${o}.lock`), 'utf8').trim()) || 0; } catch {}
-      if (pid && pidAlive(pid)) healthy.push({ role: o, healthy: true });
-    }
-    healthy.push({ role: 'brain', healthy: true });
-    for (const w of workers) if (w.child && w.child.exitCode === null && !w.quarantineUntil) healthy.push({ role: 'worker:' + w.name, healthy: true });
 
-    const jp = organLogic.joyPlan({ stateDir: STATE, now, healthy });
-    for (const p of jp.proposals || []) {
-      rewardedUntil.set(p.organ, p.until);
-      organLogic.recordReward(STATE, p.organ, p.why, p.until);
-      decide('主脑-喜悦', `奖励 ${p.organ}`, `${p.why}，24 小时内不压它`);
-    }
-  } catch (e) { log('喜悦逻辑出错：' + e.message); }
 }
 
 async function reviewCycle() {

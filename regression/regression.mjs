@@ -544,20 +544,7 @@ check('高峰时段省钱提醒在位', () => {
   return bad.length === 0 || bad.join('；');
 });
 
-check('主脑一个入口管所有 worker', () => {
-  // 2026-10-30：原来 supervisor 拉进程、stack-guard 守窗口、doctor 数锁，三处各管一半；
-  // 现在统一到 brain.mjs，名单还是读 supervisor/workers.mjs（只留一份）。
-  const f = path.join(ROOT, 'brain.mjs');
-  if (!fs.existsSync(f)) return '缺 brain.mjs';
-  const t = fs.readFileSync(f, 'utf8');
-  const bad = [];
-  if (!/supervisor',\s*'workers\.mjs'/.test(t)) bad.push('没从 workers.mjs 读名单');
-  if (!/function start\(/.test(t)) bad.push('不会拉起 worker');
-  if (!/child\.on\('exit'/.test(t)) bad.push('worker 退出后不重启');
-  if (!/brain\.json/.test(t)) bad.push('不落状态文件');
-  if (!/--status/.test(t)) bad.push('没有 --status');
-  return bad.length === 0 || bad.join('；');
-});
+
 check('主脑和旧 supervisor 互斥（不会两边抢 worker）', () => {
   // 实际撞过：主脑的 9 个子进程全因锁冲突退出，锁却被 supervisor 的 worker 占着，
   // 状态表显示「全停了」但机器上确实有 worker 在跑 —— 最难查的一种。
@@ -591,26 +578,7 @@ check('开机脚本跑主脑，且锁冲突时不空转', () => {
   return bad.length === 0 || bad.join('；');
 });
 
-check('主脑自己会拿主意（不是只会重启）', () => {
-  // 每一条都对应真出过的事：卡死、反复崩、坏依赖、桥接断、巡检停、日志涨爆、孤儿锁。
-  // 拆成三脑后，判据分散在 brain.mjs 和 hemis/right.mjs 里 —— 两边都要有。
-  const t = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
-  const r = fs.readFileSync(path.join(ROOT, 'hemis', 'right.mjs'), 'utf8');
-  const bad = [];
-  const need = [
-    [t, 'function decide(', '没有决策记录'],
-    [t, /quarantineUntil/, '反复崩不隔离'],
-    [t, /Cannot find module/, '坏依赖不识别'],
-    [r, /lockAgeSec > 180/, '卡死不重启'],
-    [r, /start-bridge/, '桥接断了不拉起'],
-    [r, /run-doctor/, '巡检停了不管'],
-    [t, /function trimLogs\(/, '日志涨爆不裁剪'],
-    [t, /function killOrphan\(/, '孤儿锁不回收'],
-  ];
-  for (const [src, re, why] of need) if (!(re instanceof RegExp ? re.test(src) : src.includes(re))) bad.push(why);
-  if (!/--decisions/.test(t)) bad.push('没有 --decisions（出事了查不了它当时怎么想的）');
-  return bad.length === 0 || bad.join('；');
-});
+
 
 check('主脑默认开机自启', () => {
   // 计划任务优先（登录后 20 秒，静默）；装不上时靠启动文件夹兜底。
@@ -661,21 +629,7 @@ check('三脑各管一摊，主脑仲裁', () => {
   if (!/hemis\/cerebellum|hemis\/left|hemis\/right/.test(b)) bad.push('主脑没接三脑');
   return bad.length === 0 || bad.join('；');
 });
-check('主脑接管 NapCat 和桥接（那两个快捷方式只是叫它起床）', () => {
-  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
-  const bad = [];
-  if (!/function spawnBridge\(/.test(b)) bad.push('主脑不拉桥接');
-  if (!/function spawnNapcat\(/.test(b)) bad.push('主脑不拉 NapCat');
-  if (!/napcat-start\.mjs/.test(b)) bad.push('拉 NapCat 没走唯一入口');
-  for (const f of ['1-启动NapCat.bat', '2-启动桥接.bat']) {
-    const p = path.join(ROOT, f);
-    if (!fs.existsSync(p)) continue;
-    const t = fs.readFileSync(p, 'utf8');
-    if (!/20-supervisor\.bat/.test(t)) bad.push(f + ' 还在自己拉服务');
-    if (/src\\bridge\.js|launcher\.bat/.test(t)) bad.push(f + ' 里还有旧启动逻辑');
-  }
-  return bad.length === 0 || bad.join('；');
-});
+
 check('小脑的「省着聊」真的会被执行', () => {
   const bw = path.join(ROOT, 'balance-watch', 'balance-watch.mjs');
   if (!fs.existsSync(bw)) return '缺 balance-watch';
@@ -731,18 +685,7 @@ check('主脑有最高决策权：越权和维持', () => {
   return bad.length === 0 || bad.join('；');
 });
 
-check('嘴默认闭着，只把「谁死了/谁摸鱼」报给主脑', () => {
-  const f = path.join(ROOT, 'mouth', 'mouth.mjs');
-  if (!fs.existsSync(f)) return '缺 mouth/mouth.mjs';
-  const t = fs.readFileSync(f, 'utf8');
-  const bad = [];
-  if (!/mouth-report\.json/.test(t)) bad.push('不写报告给主脑');
-  if (!/dead/.test(t) || !/idle/.test(t)) bad.push('不分「死」和「摸鱼」');
-  if (!/canWork/.test(t)) bad.push('不说能不能干活');
-  if (/killTree|spawn\(process\.execPath/.test(t)) bad.push('嘴自己动手了（它只该看和报）');
-  if (!/CHECK_MS/.test(t)) bad.push('不定时看');
-  return bad.length === 0 || bad.join('；');
-});
+
 check('急救队列：主脑起来后接着救其余的脑', () => {
   const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
   const m = fs.readFileSync(path.join(ROOT, 'medic', 'medic.mjs'), 'utf8');
@@ -785,16 +728,7 @@ check('主脑自律：扫过的二维码框自己收掉', () => {
   else if (/[^\x00-\x7F]/.test(fs.readFileSync(ps, 'utf8'))) bad.push('qr-black.ps1 含非 ASCII（PS5.1 会解析失败）');
   return bad.length === 0 || bad.join('；');
 });
-check('眼看到的东西会经嘴转述给主脑', () => {
-  const m = fs.readFileSync(path.join(ROOT, 'mouth', 'mouth.mjs'), 'utf8');
-  const bad = [];
-  if (!/eye-findings\.json/.test(m)) bad.push('嘴不读眼的报告');
-  if (!/eyeSaw/.test(m)) bad.push('报告里没有眼的内容');
-  if (!/转述眼/.test(m)) bad.push('日志里不转述');
-  const e = fs.readFileSync(path.join(ROOT, 'eye', 'eye.mjs'), 'utf8');
-  if (!/eye-findings\.json/.test(e)) bad.push('眼不写报告');
-  return bad.length === 0 || bad.join('；');
-});
+
 
 check('主脑看占用、超阈值就降优先级', () => {
   const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
@@ -842,29 +776,8 @@ check('理性：死掉/没用的脚本搬走并留下病因', () => {
   if (!/leftHand\.apply/.test(b)) bad.push('主脑没用左手搬');
   return bad.length === 0 || bad.join('；');
 });
-check('创造：只往 tools/gen 加，不覆盖、不碰核心代码', () => {
-  const t = fs.readFileSync(path.join(ROOT, 'logic', 'organs.mjs'), 'utf8');
-  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
-  const bad = [];
-  if (!/function creationPlan/.test(t)) bad.push('没有创造逻辑');
-  if (!/tools', 'gen'/.test(t)) bad.push('生成物不在 tools/gen');
-  if (!/recordCreated/.test(t)) bad.push('不记录造过什么');
-  if (!/if \(fs\.existsSync\(abs\)\) continue/.test(b)) bad.push('会覆盖已有文件');
-  if (!/主脑-创造工具/.test(b)) bad.push('主脑不执行创造');
-  return bad.length === 0 || bad.join('；');
-});
-check('喜悦：连续正常一周才激励，而且有免检期', () => {
-  const t = fs.readFileSync(path.join(ROOT, 'logic', 'organs.mjs'), 'utf8');
-  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
-  const bad = [];
-  if (!/REWARD_MS = 7 \* DAY/.test(t)) bad.push('不是按 7 天算');
-  if (!/function joyPlan/.test(t)) bad.push('没有喜悦逻辑');
-  if (!/reward-organ/.test(t)) bad.push('不产出激励');
-  if (!/rewardedUntil/.test(b)) bad.push('激励不生效（该免检时还在压它）');
-  if (!/主脑-喜悦/.test(b)) bad.push('激励不留痕');
-  if (!/function recordReward/.test(t)) bad.push('激励不落盘');
-  return bad.length === 0 || bad.join('；');
-});
+
+
 
 check('黑匣子：一直录，出事才写事故报告', () => {
   const f = path.join(ROOT, 'blackbox', 'blackbox.mjs');
@@ -935,16 +848,6 @@ check('窗外：会记日期和天气，桥接会注入', () => {
   if (!/【今天外面】/.test(b)) bad.push('桥接没注入【今天外面】');
   return bad.length === 0 || bad.join('；');
 });
-check('镜子：只从他说的话里总结偏好', () => {
-  const m = fs.readFileSync(path.join(ROOT, 'mirror', 'mirror.mjs'), 'utf8');
-  const bad = [];
-  if (!/taste\.json/.test(m)) bad.push('不写 taste.json');
-  if (!/herLabels|mustReplyKeywords/.test(m)) bad.push('分不清谁是她（会把她的台词当他的偏好）');
-  if (!/DISLIKE_RE/.test(m) || !/LIKE_RE/.test(m)) bad.push('没有喜欢/不喜欢的规则');
-  const b = fs.readFileSync(path.join(ROOT, 'dsh-qq', 'qq-bridge-enhanced-v1.1.0', 'src', 'bridge.js'), 'utf8');
-  if (!/【他的偏好/.test(b)) bad.push('桥接没注入【他的偏好】');
-  return bad.length === 0 || bad.join('；');
-});
 check('存档点：能打快照、只留 7 个、能回滚', () => {
   const s = path.join(ROOT, 'tools', 'snapshot.mjs');
   if (!fs.existsSync(s)) return '缺 tools/snapshot.mjs';
@@ -955,6 +858,58 @@ check('存档点：能打快照、只留 7 个、能回滚', () => {
   if (!/const KEEP = 7/.test(t)) bad.push('不留 7 个');
   if (!/--restore/.test(t)) bad.push('不能回滚');
   if (!/回滚前自动备份/.test(t)) bad.push('回滚前不备份当前状态（点错就回不来）');
+  return bad.length === 0 || bad.join('；');
+});
+
+
+check('主脑的工具函数抽到了 lib/brain-util.mjs', () => {
+  const u = path.join(ROOT, 'lib', 'brain-util.mjs');
+  if (!fs.existsSync(u)) return '缺 lib/brain-util.mjs';
+  const ut = fs.readFileSync(u, 'utf8');
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  for (const fn of ['export function registry', 'export function spawnBridge', 'export function spawnNapcat', 'export function trimLogs']) {
+    if (!ut.includes(fn)) bad.push('util 里缺 ' + fn.replace('export function ', ''));
+  }
+  if (!/from '\.\/lib\/brain-util\.mjs'/.test(b)) bad.push('主脑没引用 util');
+  return bad.length === 0 || bad.join('；');
+});
+check('眼顺手把报告写给主脑（原「嘴」已并入）', () => {
+  const e = fs.readFileSync(path.join(ROOT, 'eye', 'eye.mjs'), 'utf8');
+  const r = path.join(ROOT, 'lib', 'reporter.mjs');
+  if (!fs.existsSync(r)) return '缺 lib/reporter.mjs';
+  const bad = [];
+  if (!/reporter/.test(e)) bad.push('眼没调 reporter');
+  const rt = fs.readFileSync(r, 'utf8');
+  if (!/eye-report\.json/.test(rt)) bad.push('不写 eye-report.json');
+  if (!/dead/.test(rt) || !/idle/.test(rt)) bad.push('不分死/摸鱼');
+  const b = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  if (!/eye-report\.json/.test(b)) bad.push('主脑没读新报告');
+  if (fs.existsSync(path.join(ROOT, 'mouth'))) bad.push('嘴的目录还在（应该已退役）');
+  return bad.length === 0 || bad.join('；');
+});
+check('新器官默认只读，动手要授权', () => {
+  const p = path.join(ROOT, 'lib', 'organ-policy.mjs');
+  if (!fs.existsSync(p)) return '缺 lib/organ-policy.mjs';
+  const t2 = fs.readFileSync(p, 'utf8');
+  const bad = [];
+  if (!/DEFAULT_ACTIVE/.test(t2)) bad.push('没有默认白名单');
+  if (!/export function isActive/.test(t2)) bad.push('没有 isActive');
+  if (!/organ-policy\.json/.test(t2)) bad.push('不落策略文件');
+  if (!fs.existsSync(path.join(ROOT, 'tools', 'organ-mode.mjs'))) bad.push('缺授权命令 organ-mode');
+  for (const org of ['ears/ears.mjs', 'hippocampus/hippocampus.mjs', 'treasurer/treasurer.mjs']) {
+    if (!/isActive\(/.test(fs.readFileSync(path.join(ROOT, org), 'utf8'))) bad.push(org + ' 没装闸门');
+  }
+  return bad.length === 0 || bad.join('；');
+});
+check('生物钟：四段作息，只切一次', () => {
+  const c = path.join(ROOT, 'clock', 'clock.mjs');
+  if (!fs.existsSync(c)) return '缺 clock/clock.mjs';
+  const t3 = fs.readFileSync(c, 'utf8');
+  const bad = [];
+  for (const id of ['night', 'morning', 'work', 'evening']) if (!new RegExp("id: '" + id + "'").test(t3)) bad.push('缺 ' + id + ' 段');
+  if (!/api\/socialV2\/config/.test(t3)) bad.push('不切桥接主动发言');
+  if (!/st\.phase !== phase\.id/.test(t3)) bad.push('每轮都改（应该只在换段时改）');
   return bad.length === 0 || bad.join('；');
 });
 

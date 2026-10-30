@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, STATE, stamp } from '../lib/base.mjs';
+import { isActive } from '../lib/organ-policy.mjs';
 import * as rightHand from '../hands/right-hand.mjs';
 
 const NAME = 'hippocampus';
@@ -88,7 +89,8 @@ async function main() {
         .map((f) => ({ text: f.text.slice(0, 80), ageDays: Math.round((now - (f.confirmedAt || f.addedAt)) / 86400000) }));
 
       let removed = 0;
-      if (key && forget.length) {
+      const active = isActive(STATE, 'hippocampus');
+      if (active && key && forget.length) {
         const batch = forget.slice(0, MAX_FORGET_PER_RUN).map((f) => ({ category: 'activeTopic', content: f.text, why: `话题 ${f.ageDays} 天没提` }));
         const r = await rightHand.apply({ root: ROOT, bridgeDir: BRIDGE, key }, batch);
         removed = r.removed || 0;
