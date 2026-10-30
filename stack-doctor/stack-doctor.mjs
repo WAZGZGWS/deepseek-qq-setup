@@ -529,15 +529,15 @@ function renderQrFile() {
  * 邮件不依赖 QQ 登录状态，能落到手机上；验证链接在手机浏览器里就能点完。
  * 没设授权码时安静失败，只在日志里说一句（不能因为邮件失败把巡检弄崩）。
  */
-function mailOffline(subject, body) {
+function mailOffline(subject, body, attachPath = '') {
   try {
     const tool = path.join(ROOT, 'tools', 'notify-offline.mjs');
     if (!fs.existsSync(tool)) return false;
     const bodyFile = path.join(STATE_DIR, 'notify-body.txt');
     fs.writeFileSync(bodyFile, String(body || '') + '\n', 'utf8');
-    execFileSync(process.execPath, [tool, `--subject=${subject}`, `--body-file=${bodyFile}`], {
-      encoding: 'utf8', windowsHide: true, timeout: 60000,
-    });
+    const args = [tool, `--subject=${subject}`, `--body-file=${bodyFile}`];
+    if (attachPath && fs.existsSync(attachPath)) args.push(`--attach=${attachPath}`);
+    execFileSync(process.execPath, args, { encoding: 'utf8', windowsHide: true, timeout: 60000 });
     return true;
   } catch {
     return false;
@@ -595,6 +595,7 @@ async function main() {
           const waitH = Number(process.env.HUMAN_WAIT_H || 6);
           st.pausedUntil = Date.now() + waitH * 3600 * 1000;
           let text;
+          let qrAttach = '';   // 二维码 PNG 路径（新设备那种情况才有），给邮件当附件
           if (e.status === 2) {
             // 2026-10-29 踩的坑：验证链接跟「这一次」密码请求的 sid 绑定，脚本一退出链接就作废。
             // 那天哥点链接时链接早死了，来回折腾三次。
@@ -606,16 +607,22 @@ async function main() {
               : 'QQ 登录需要短信/验证码验证，自动重试已暂停。\n\n打开 NapCat WebUI（http://127.0.0.1:6099）完成验证，或用手机登录这个号后扫码。';
           } else {
             const qrPath = renderQrFile();
+            let qrUrl = '';
+            try { qrUrl = String(fs.readFileSync(path.join(STATE_DIR, 'napcat-qrcode.txt'), 'utf8')).trim().split('\n')[0]; } catch {}
             text = qrPath
-              ? `QQ 把这次登录判成「新设备」，需要扫码验证（自动重试已暂停）。\n\n二维码已画到本地：\n${qrPath}\n\n双击打开它，用手机 QQ 扫一下就行，不用开 WebUI。`
+              ? `QQ 把这次登录判成「新设备」，需要扫码（自动重试已暂停）。\n\n` +
+                (qrUrl ? `① 手机上直接点这条（等于扫码，会唤起 QQ 让你确认）：\n${qrUrl}\n\n` : '') +
+                `② 或者用旁边的平板/另一台手机扫邮件里的二维码图片。\n\n二维码也画在本机：${qrPath}\n\n后台会自动重试，你确认后她会自己回来。`
               : 'QQ 把这次登录判成「新设备」，需要扫码验证，自动重试已暂停。\n\n用登录着这个号的手机扫码（NapCat WebUI 里有二维码）。';
+            // 邮件里带上二维码图片：旁边有设备就能扫；手机点链接也算“扫码”
+            qrAttach = qrPath;
           }
           if (Date.now() - st.alertedAt > ALERT_COOLDOWN_MS) {
             try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}
             desktopAlert(text);
             // 她这时候说不了话（QQ 掉着），桌面通知哥也看不见 —— 用邮件把消息送到手机上。
             // 链接在手机上就能完成验证：点开 → 收短信 → 填 → 后台的轮询会把她接回来。
-            const mailOk = mailOffline('【她掉线了】QQ 要验证，手机点链接就能救回来', text);
+            const mailOk = mailOffline('【她掉线了】QQ 要验证，手机点链接就能救回来', text, typeof qrAttach === 'string' ? qrAttach : '');
             log(mailOk ? '已发邮件通知（QQ 外的通道）' : '邮件通知没发出去（检查 tools/set-mail-auth.cmd 有没有设过）');
             st.alertedAt = Date.now();
             st.alertedBy = 'QQ（NapCat）';

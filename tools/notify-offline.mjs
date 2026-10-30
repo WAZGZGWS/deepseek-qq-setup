@@ -94,14 +94,23 @@ const transport = nodemailer.createTransport({
   auth: { user: USER, pass: auth },
 });
 
+// 可选附件（比如登录二维码 PNG）：手机上看不了自己的屏幕，
+// 但旁边要是有平板/别人的手机，就能扫；也方便转发。
+const attachPath = arg('attach');
+const attachments = [];
+if (attachPath && fs.existsSync(attachPath)) {
+  attachments.push({ filename: path.basename(attachPath), path: attachPath });
+}
+
 try {
   const info = await transport.sendMail({
     from: `"大肥鱼掉线提醒" <${USER}>`,
     to: TO,
     subject,
     text: body,
+    attachments,
   });
-  log(`已发邮件 → ${TO}（${info.messageId || 'ok'}）`);
+  log(`已发邮件 → ${TO}${attachments.length ? `（含附件 ${attachments.length} 个）` : ''}（${info.messageId || 'ok'}）`);
   process.exit(0);
 } catch (e) {
   log('发邮件失败：' + String(e.message || e).slice(0, 200));

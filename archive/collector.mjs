@@ -201,6 +201,7 @@ async function tick() {
   // 2026-10-30 实测：09:44 那句「放心，我这脑子…」在档案里出现了两次。
   // 所以落盘前再跟「今天档案已有的行」比一次：同一条时间+人+原话就跳过。
   const exists = existingLineKeys(today());
+  const inBatch = new Set();
   for (const m of ordered) {
     const key = msgKey(m);
     if (!key) continue;
@@ -218,7 +219,11 @@ async function tick() {
     const text = clean(m.plain || m.text);
     const t = m.time ? hhmm(m.time) : '';
     const line = `- ${t} **${who}**：${text}`;
-    if (exists.has(`${t}|${who}|${text}`)) { maxTime = Math.max(maxTime, mt); continue; }
+    // 既要跟「档案里已有的行」比，也要跟「这一批里刚加的行」比：
+    // 桥接 recent 和 QQ 历史可能在同一批里各给一份，只比文件会漏（2026-10-30 实测又冒出 4 行重复）
+    const lineKey = `${t}|${who}|${text}`;
+    if (exists.has(lineKey) || inBatch.has(lineKey)) { maxTime = Math.max(maxTime, mt); continue; }
+    inBatch.add(lineKey);
     added += 1;
     maxTime = Math.max(maxTime, mt);
     lines.push(line);
@@ -307,7 +312,7 @@ function dedupe(day) {
     const line = lines[i];
     if (!/^- \d{2}:\d{2} /.test(line)) { out.push(line); continue; }
     const prev = lastSeen.get(line);
-    if (prev !== undefined && out.length - prev <= 20) { removed++; continue; }
+    if (prev !== undefined && out.length - prev <= 60) { removed++; continue; }
     lastSeen.set(line, out.length);
     out.push(line);
   }
