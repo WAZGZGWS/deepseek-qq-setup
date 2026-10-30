@@ -3,12 +3,11 @@
  * stack-guard —— 整条链的守夜人。
  *
  * 链条是：NapCat(:3000/3001) → 桥接(:3100) → DSH，另有主脑 brain.mjs 管着 9 个后台脚本。
- * 任何一环普通权限能救的，这里都救了；唯独 NapCat 要过一次 UAC，救不了，只能提示。
+ * 它只负责「主脑别死」这一件事：主脑活着的时候它什么都不做。
  *
  * 每 10 秒看一次：
  *   · 主脑不在              → 拉起来（用 detached，脱离本进程，我死了它还活着）
- *   · :3100 断 & :3000 通    → 拉起桥接
- *   · :3000 断               → NapCat 没起，不硬拉桥接（拉了也连不上）
+ *   · 别的故障              → 不碰，全归主脑（它一次只做一个决定，不会两边抢着拉）
  *
  * 判活不能只看 pid —— Windows 会复用 pid。必须核对命令行里跑的是不是那个脚本。
  */
@@ -78,7 +77,9 @@ let warnedNoNapCat = false;
 let warnedNoSupervisor = false;
 
 async function tick() {
-  // ── 1. 主脑（brain.mjs 管所有 worker；它在，旧 supervisor 就起不来） ──
+  // 守夜人只干一件事：主脑还活着吗。
+  // 桥接/NapCat/worker 的处置全交给主脑 —— 两处都动手会互相踩（10-30 就撞过：
+  // 守夜人每 10 秒拉一次桥接、主脑每 60 秒也拉，谁先谁后全看运气，日志还会说谎）。
   const brainPid = readPid('brain');
   if (!pidRuns(brainPid, 'brain.mjs')) {
     if (!warnedNoSupervisor) log(`主脑不在（锁里是 ${brainPid || '空'}），拉起来`);
@@ -90,34 +91,11 @@ async function tick() {
       log('拉起主脑失败:', e.message);
       warnedNoSupervisor = true;
     }
-  }
-
-  // ── 2. 桥接 ─────────────────────────────────────────────────────
-  if (await portOpen(3100)) {
-    if (!lastUp) { log('桥接已就绪'); lastUp = true; }
-    warnedNoNapCat = false;
     return;
   }
-
-  if (!(await portOpen(3000))) {
-    if (!warnedNoNapCat) {
-      log('NapCat(:3000) 还没起来，先不拉桥接 —— 等你点完那个 UAC 再连');
-      warnedNoNapCat = true;
-    }
-    return;
-  }
-
-  if (!(await portOpen(3100))) {
-    try {
-      const pid = spawnDetached(path.join(BRIDGE, 'src', 'bridge.js'), BRIDGE, 'bridge-run.log');
-      log(`NapCat 在线，已拉起桥接 pid ${pid}`);
-      lastUp = false;
-    } catch (e) {
-      log('拉起桥接失败:', e.message);
-    }
-  }
+  warnedNoSupervisor = false;
 }
 
-log(`守夜人启动：每 ${CHECK_SEC}s 检查 主脑 / :3000(NapCat) / :3100(桥接)`);
+log(`守夜人启动：每 ${CHECK_SEC}s 只确认主脑活着（其余故障由主脑决策）`);
 await tick();
 setInterval(() => void tick().catch((e) => log('检查出错:', e.message)), CHECK_SEC * 1000);

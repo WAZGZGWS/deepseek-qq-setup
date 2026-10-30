@@ -335,22 +335,19 @@ function Write-Launcher($fileName, $title, $body) {
 
 $bootArg = if ($BotQQ) { "-q $BotQQ" } else { '' }
 
+# NapCat 一律走 tools\napcat-start.mjs：它先看 :3000 和 QQ.exe 在不在，
+# 再拿单实例锁，才去拉 NapCat —— 两个实例抢同一个号会互相顶号（"刚登上就被踢"）。
 Write-Launcher '1-启动NapCat.bat' 'NapCat (QQ backend)' @"
-cd /d "$NapCatDir"
-if not exist launcher.bat (
-  echo [X] launcher.bat not found in $NapCatDir
-  echo     Download NapCat Shell from https://github.com/NapNeko/NapCatQQ/releases
-  pause
-  exit /b 1
-)
-call launcher.bat $bootArg
-pause
+cd /d "$TargetDir"
+rem Guarded start: refuses if port 3000 or QQ.exe is already there.
+"$nodeExe" "$TargetDir\tools\napcat-start.mjs" --as-user
 "@
 
 Write-Launcher 'napcat-boot.bat' 'NapCat boot' @"
-cd /d "$NapCatDir"
-if not exist launcher.bat exit /b 1
-call launcher.bat $bootArg
+cd /d "$TargetDir"
+rem Guarded start (direct mode): used by scheduled tasks.
+"$nodeExe" "$TargetDir\tools\napcat-start.mjs" --direct
+exit /b 0
 "@
 
 Write-Launcher '2-启动桥接.bat' 'QQ Bridge' @"
@@ -452,6 +449,34 @@ if (-not $isAdmin) {
         Say '  [OK] 已注册（登录启动 + 每 2 分钟）' 'Green'
     } catch {
         Say "  [X] 失败：$($_.Exception.Message)" 'Red'
+    }
+}
+
+Head '⑦.5 主脑开机自启（不用管理员）'
+if ($DryRun) {
+    Say '  [plan] 注册计划任务 QQBotBrain（登录后 20 秒，后台静默）' 'DarkGray'
+} else {
+    # 主脑必须用「普通权限 + 交互式」跑：worker 里有要拉起 QQ 的，提权反而拉不起来。
+    # 所以这一段不需要管理员，装不上也不影响其它功能。
+    $brainTask = 'QQBotBrain'
+    Unregister-ScheduledTask -TaskName $brainTask -Confirm:$false -ErrorAction SilentlyContinue
+    try {
+        if (Test-Path (Join-Path $TargetDir 'run-hidden.vbs')) {
+            $bAction = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$TargetDir\run-hidden.vbs`" `"$TargetDir\20-supervisor.bat`"" -WorkingDirectory $TargetDir
+        } else {
+            $bAction = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$TargetDir\20-supervisor.bat`"" -WorkingDirectory $TargetDir
+        }
+        $bLogon = New-ScheduledTaskTrigger -AtLogOn
+        $bLogon.Delay = 'PT20S'
+        $bSet = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+        $bWho = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Limited
+        Register-ScheduledTask -TaskName $brainTask -Action $bAction -Trigger $bLogon `
+            -Settings $bSet -Principal $bWho -Force | Out-Null
+        Say '  [OK] 已注册（登录后 20 秒，主脑自动接管所有后台脚本）' 'Green'
+    } catch {
+        Say "  [--] 没注册上：$($_.Exception.Message)" 'Yellow'
+        Say '       不影响使用：启动文件夹里的 qqbot-supervisor.cmd 也会拉起主脑。' 'Gray'
     }
 }
 

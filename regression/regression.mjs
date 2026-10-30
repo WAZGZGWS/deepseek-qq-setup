@@ -592,6 +592,49 @@ check('开机脚本跑主脑，且锁冲突时不空转', () => {
   return bad.length === 0 || bad.join('；');
 });
 
+check('主脑自己会拿主意（不是只会重启）', () => {
+  // 每一条都对应真出过的事：卡死、反复崩、坏依赖、桥接断、巡检停、日志涨爆、孤儿锁。
+  const t = fs.readFileSync(path.join(ROOT, 'brain.mjs'), 'utf8');
+  const bad = [];
+  const need = [
+    ['function decide(', '没有决策记录'],
+    [/quarantineUntil/, '反复崩不隔离'],
+    [/Cannot find module/, '坏依赖不识别'],
+    [/HUNG_LOCK_SEC/, '卡死不重启'],
+    [/function startBridge\(/, '桥接断了不拉起'],
+    [/function ensureDoctor\(/, '巡检停了不管'],
+    [/function trimLogs\(/, '日志涨爆不裁剪'],
+    [/function killOrphan\(/, '孤儿锁不回收'],
+  ];
+  for (const [re, why] of need) if (!(re instanceof RegExp ? re.test(t) : t.includes(re))) bad.push(why);
+  if (!/--decisions/.test(t)) bad.push('没有 --decisions（出事了查不了它当时怎么想的）');
+  return bad.length === 0 || bad.join('；');
+});
+check('守夜人只管主脑，不跟它抢着拉东西', () => {
+  // 两处都动手 = 谁先谁后看运气，日志还会说谎（10-30 撞过）。
+  const g = fs.readFileSync(path.join(ROOT, 'stack-guard', 'stack-guard.mjs'), 'utf8');
+  const bad = [];
+  if (/bridge\.js/.test(g)) bad.push('守夜人还在自己拉桥接');
+  if (!/brain\.mjs/.test(g)) bad.push('守夜人不保主脑');
+  return bad.length === 0 || bad.join('；');
+});
+check('主脑默认开机自启', () => {
+  // 计划任务优先（登录后 20 秒，静默）；装不上时靠启动文件夹兜底。
+  const inst = path.join(ROOT, 'install.ps1');
+  const bad = [];
+  if (fs.existsSync(inst)) {
+    const s = fs.readFileSync(inst, 'utf8');
+    if (!/QQBotBrain/.test(s)) bad.push('install.ps1 没注册主脑自启任务');
+    if (!/20-supervisor\.bat/.test(s)) bad.push('自启任务没指到启动脚本');
+  }
+  const startup = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'qqbot-supervisor.cmd');
+  if (fs.existsSync(startup)) {
+    if (!/20-supervisor\.bat/.test(fs.readFileSync(startup, 'utf8'))) bad.push('启动文件夹那个没跑主脑');
+  }
+  if (bad.length === 0) return true;
+  return bad.join('；');
+});
+
 // ---- 输出 ----
 let failed = 0;
 for (const r of results) {
