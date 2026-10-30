@@ -67,6 +67,19 @@ function loadConfig() {
   };
 }
 
+/** 今天（北京时间）是不是「放宽日」：读 balance-watch.json 的 lenientDates，格式 MM-DD */
+function isLenientDay() {
+  try {
+    const file = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'balance-watch.json'), 'utf8'));
+    const list = Array.isArray(file.lenientDates) ? file.lenientDates.map((x) => String(x).trim()) : [];
+    if (!list.length) return false;
+    const md = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }).slice(5); // MM-DD
+    return list.includes(md);
+  } catch {
+    return false;
+  }
+}
+
 function readKey(file) {
   // 以文件为准。以前先看 process.env，结果用户级环境变量里躺着一个失效的旧 key，
   // 进程继承到它就 401，而手动跑（shell 没这个变量）反而正常 —— 排查了半天。
@@ -286,6 +299,17 @@ async function tick(cfg) {
   state.lastCheckAt = Date.now();
   state.lastBalance = bal.total;
   log(`余额 ${bal.total.toFixed(2)} ${bal.currency}`);
+
+  // 生日放宽：她那边的日子（和她自己定的、主人 11-20）不催余额。
+  // 每天只记一次日志，免得每个 tick 都刷；账照记（lastBalance 已写），只是不提醒。
+  if (isLenientDay()) {
+    if (state.lenientDay !== today()) {
+      state.lenientDay = today();
+      log('今天是她/他的生日 —— 余额提醒放宽：只记账，不催');
+      writeState(state);
+    }
+    return;
+  }
 
   // 按余额切换「说话频率」（只在档位变化时才调接口，避免每 30 分钟写一次配置）
   const mode = pickMode(bal.available ? bal.total : 0);

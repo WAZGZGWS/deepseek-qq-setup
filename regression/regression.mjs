@@ -342,6 +342,11 @@ check('生日由她自己定（记忆 → 每年任务，自动闭环）', () =>
   const bad = [];
   if (!/我的生日是/.test(s)) bad.push('没有从记忆里读生日');
   if (!/允许你发一条说说/.test(s)) bad.push('生日这天没有「允许发说说」的许可');
+  if (!/按你自己的想法写/.test(s)) bad.push('生日说说没有「按她自己的想法写」');
+  if (!/ensureYearly\('他的生日'/.test(s)) bad.push('没有给主人也建生日任务');
+  if (!/lenientDates/.test(s)) bad.push('生日没有写进余额放宽日');
+  const bw = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
+  if (!/isLenientDay/.test(bw)) bad.push('balance-watch 没接放宽日');
   if (!/yearly/.test(s)) bad.push('没有建每年循环任务');
   if (!/birthday-sync/.test(c)) bad.push('cron 里没有每天校验');
   return bad.length === 0 || bad.join('；');
