@@ -499,6 +499,23 @@ async function startVerifyPoller(qqLogin) {
   return '';
 }
 
+/**
+ * 让 NapCat 的登录二维码落到本地 PNG。
+ * 哥的原话是「扫码最麻烦」——麻烦的其实是开浏览器、输 WebUI token、再找登录页。
+ * 二维码内容就是一条 URL，我们自己画成 PNG，双击或在聊天里发一下就能扫。
+ */
+function renderQrFile() {
+  try {
+    const tool = path.join(ROOT, 'tools', 'show-qr.mjs');
+    if (!fs.existsSync(tool)) return '';
+    const out = execFileSync(process.execPath, [tool], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+    const line = String(out || '').split('\n').find((l) => l.includes('二维码已生成'));
+    return line ? line.replace(/^.*二维码已生成：/, '').trim() : '';
+  } catch {
+    return '';
+  }
+}
+
 async function main() {
   const state = loadState();
 
@@ -560,7 +577,10 @@ async function main() {
               ? `QQ 需要短信/验证码验证（自动重试已暂停）。\n\n链接（30 分钟内有效，后台在等你验证）：\n${link}\n\n已写入 state/qq-verify-link.txt`
               : 'QQ 登录需要短信/验证码验证，自动重试已暂停。\n\n打开 NapCat WebUI（http://127.0.0.1:6099）完成验证，或用手机登录这个号后扫码。';
           } else {
-            text = 'QQ 把这次登录判成「新设备」，需要扫码验证，自动重试已暂停。\n\n用登录着这个号的手机扫码（NapCat WebUI 里有二维码）。';
+            const qrPath = renderQrFile();
+            text = qrPath
+              ? `QQ 把这次登录判成「新设备」，需要扫码验证（自动重试已暂停）。\n\n二维码已画到本地：\n${qrPath}\n\n双击打开它，用手机 QQ 扫一下就行，不用开 WebUI。`
+              : 'QQ 把这次登录判成「新设备」，需要扫码验证，自动重试已暂停。\n\n用登录着这个号的手机扫码（NapCat WebUI 里有二维码）。';
           }
           if (Date.now() - st.alertedAt > ALERT_COOLDOWN_MS) {
             try { fs.writeFileSync(ALERT_FILE, `${new Date().toISOString()}\n${text}\n`); } catch {}

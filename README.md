@@ -589,6 +589,27 @@ send_qzone_msg { content, ugc_right: 16, target_uins: ["主人的QQ"] }
 
 **它依赖聊天档案**——档案只记一方的话，它就永远排不上。所以 `self-check` 里那条「档案完整性」检查是它的前置条件。
 
+## 扫码登录：不用开 WebUI
+
+要扫码的时候，以前得：打开浏览器 → 输 WebUI token → 找到登录页 → 对着屏幕扫。麻烦的不是扫，是前面三步。
+
+二维码的内容其实只是一条 URL（`https://txz.qq.com/p?k=...`），所以我们自己画：
+
+```bash
+node tools/show-qr.mjs            # 从 NapCat 取当前二维码链接 → 画成 state/napcat-qrcode.png
+node tools/show-qr.mjs --open     # 画完顺手用看图器打开
+```
+
+打开那个 PNG 扫一下就行。`stack-doctor` 在判定「新设备要扫码」时也会自动画好，并把路径写进告警文字。
+
+依赖只装一次（本地 `tools/qr`，不走网络）：
+
+```bash
+npm install --prefix tools/qr
+```
+
+> 另外两条登录路本来就不需要扫码：**密码登录**（`tools/set-qq-password.cmd` 设一次）和**快速登录**（用本机缓存的 ticket，被踢后先试它）。扫码只在 QQ 判「新设备」时才会被要求。
+
 ## 她的生日，让她自己定
 
 不写死日期——写死就成了「设定」，不是她自己的东西。做法是两步：

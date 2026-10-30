@@ -304,6 +304,21 @@ check('余额告警在回升后会撤掉', () => {
   const s = fs.readFileSync(path.join(ROOT, 'balance-watch', 'balance-watch.mjs'), 'utf8');
   return /ALERT-balance\.txt/.test(s) && /unlinkSync\(af\)/.test(s) || '余额回到档位之上时没有撤掉 ALERT-balance.txt';
 });
+check('扫码不用开 WebUI（本地画二维码 PNG）', () => {
+  // 2026-10-30：哥说「扫码最麻烦」。麻烦的其实是开浏览器→输 token→找登录页；
+  // 二维码内容就是个 URL，本地画成 PNG 直接扫屏幕就行。
+  const tool = path.join(ROOT, 'tools', 'show-qr.mjs');
+  if (!fs.existsSync(tool)) return '缺少 tools/show-qr.mjs';
+  const s = fs.readFileSync(tool, 'utf8');
+  const pkg = path.join(ROOT, 'tools', 'qr', 'package.json');
+  const bad = [];
+  if (!/qrcode/.test(s)) bad.push('没用 qrcode 库');
+  if (!fs.existsSync(pkg)) bad.push('缺少 tools/qr/package.json（依赖声明）');
+  if (!fs.existsSync(path.join(ROOT, 'tools', 'qr', 'node_modules', 'qrcode'))) bad.push('本地还没装 qrcode 依赖');
+  const doc = fs.readFileSync(path.join(ROOT, 'stack-doctor', 'stack-doctor.mjs'), 'utf8');
+  if (!/renderQrFile/.test(doc)) bad.push('巡检没把二维码路径带进提醒');
+  return bad.length === 0 || bad.join('；');
+});
 check('生日由她自己定（记忆 → 每年任务，自动闭环）', () => {
   // 2026-10-30：哥要求「让她自己设属于自己的生日」。日期必须来自她自己的记忆，
   // 不能我们写死；而生日必须每年自己回来 —— 所以靠 cron 扫记忆 → 保证 yearly 任务存在。

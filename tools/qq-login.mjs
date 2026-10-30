@@ -196,7 +196,18 @@ async function qr() {
   fs.mkdirSync(path.dirname(QR_FILE), { recursive: true });
   fs.writeFileSync(QR_FILE.replace(/\.png$/, '.txt'), url + '\n', 'utf8');
   console.log('二维码链接：', url);
-  console.log('（扫它需要手机上登录的是机器人那个号，所以你多半用不上这条）');
+  // 顺手画成 PNG：扫屏幕比「开浏览器 → 输 token → 找登录页」省事得多
+  try {
+    const { execFileSync } = await import('node:child_process');
+    const out = execFileSync(process.execPath, [path.join(ROOT, 'tools', 'show-qr.mjs'), `--url=${url}`], {
+      encoding: 'utf8', windowsHide: true, timeout: 30000,
+    });
+    const line = String(out || '').split('\n').find((l) => l.includes('二维码已生成'));
+    if (line) console.log(line.trim());
+  } catch (e) {
+    console.log('（画 PNG 失败，用上面的链接也行：' + String(e.message || e).slice(0, 80) + '）');
+  }
+  console.log('（扫它需要手机上登录的是机器人那个号）');
   return true;
 }
 
