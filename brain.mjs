@@ -185,7 +185,7 @@ function printStatus() {
   if (!d) { console.log('还没有 brain.json（主脑还没跑过）'); return; }
   console.log(`主脑 pid=${d.pid}  更新于 ${new Date(d.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
   console.log(`  NapCat:${d.napcat ? '通' : '断'}  桥接:${d.bridge ? '通' : '断'}`);
-  if (d.mouth && d.mouth.summary) console.log('  嘴报：' + d.mouth.summary);
+  if (d.mouth && d.mouth.summary) console.log('  眼报：' + d.mouth.summary);
   if (Array.isArray(d.resources) && d.resources.length) {
     const top = [...d.resources].sort((a, b) => b.rssMb - a.rssMb).slice(0, 3);
     console.log('  占用：' + top.map((x) => x.role + ' ' + x.rssMb + 'MB/' + x.cpuPct + '%').join('  '));
